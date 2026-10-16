@@ -11,7 +11,9 @@ enum Kind {
 	SKILL_SLASH,
 	SKILL_HEAL,
 	SKILL_ATK,
-	SKILL_ASPD
+	SKILL_ASPD,
+	SKILL_CRIT,
+	SKILL_DEF_HP
 }
 
 var icon_kind: Kind = Kind.WEAPON
@@ -19,6 +21,8 @@ var border_color: Color = Color(0.45, 0.48, 0.55)
 var accent_color: Color = Color(0.85, 0.85, 0.85)
 var badge_text: String = ""
 var is_locked: bool = false
+var is_rainbow_border: bool = false
+var rainbow_hue: float = 0.0
 var cooldown_ratio: float = 0.0 # 0.0 ~ 1.0
 var cooldown_sec: float = 0.0
 
@@ -26,11 +30,18 @@ func _init(slot_size: Vector2 = Vector2(56, 56)) -> void:
 	custom_minimum_size = slot_size
 	mouse_filter = Control.MOUSE_FILTER_PASS
 
+func _process(delta: float) -> void:
+	if is_rainbow_border:
+		rainbow_hue = fmod(rainbow_hue + delta * 0.45, 1.0)
+		accent_color = Color.from_hsv(rainbow_hue, 0.72, 1.0)
+		queue_redraw()
+
 func setup_equipment(item: EquipmentData, empty_slot: EquipmentData.SlotType = EquipmentData.SlotType.WEAPON) -> void:
 	cooldown_ratio = 0.0
 	cooldown_sec = 0.0
 	if item == null:
 		is_locked = true
+		is_rainbow_border = false
 		border_color = Color(0.32, 0.35, 0.42)
 		accent_color = Color(0.35, 0.38, 0.45)
 		badge_text = ""
@@ -43,6 +54,7 @@ func setup_equipment(item: EquipmentData, empty_slot: EquipmentData.SlotType = E
 				icon_kind = Kind.EMPTY_SHIELD
 	else:
 		is_locked = false
+		is_rainbow_border = item.is_rainbow()
 		border_color = item.get_rarity_color()
 		accent_color = item.get_rarity_color()
 		badge_text = "+%d" % item.level
@@ -57,20 +69,33 @@ func setup_equipment(item: EquipmentData, empty_slot: EquipmentData.SlotType = E
 
 func setup_skill(skill: SkillData) -> void:
 	is_locked = not skill.is_learned()
-	badge_text = ("Lv.%d" % skill.level) if skill.is_learned() else "未學"
+	is_rainbow_border = false
+	if skill.is_learned():
+		badge_text = "Lv.%d" % skill.level
+	elif GameManager.level < skill.required_level:
+		badge_text = "需Lv%d" % skill.required_level
+	else:
+		badge_text = "可學"
+
 	match skill.skill_type:
 		SkillData.SkillType.ACTIVE_DAMAGE:
 			icon_kind = Kind.SKILL_SLASH
-			accent_color = Color(1.0, 0.48, 0.2)
+			accent_color = Color(1.0, 0.42, 0.25)
 		SkillData.SkillType.ACTIVE_HEAL:
 			icon_kind = Kind.SKILL_HEAL
 			accent_color = Color(0.35, 0.95, 0.5)
 		SkillData.SkillType.PASSIVE_ATK:
 			icon_kind = Kind.SKILL_ATK
-			accent_color = Color(1.0, 0.8, 0.25)
+			accent_color = Color(1.0, 0.78, 0.25)
 		SkillData.SkillType.PASSIVE_ASPD:
 			icon_kind = Kind.SKILL_ASPD
 			accent_color = Color(0.35, 0.85, 1.0)
+		SkillData.SkillType.PASSIVE_CRIT:
+			icon_kind = Kind.SKILL_CRIT
+			accent_color = Color(1.0, 0.32, 0.55)
+		SkillData.SkillType.PASSIVE_BLOCK:
+			icon_kind = Kind.SKILL_DEF_HP
+			accent_color = Color(0.4, 0.88, 0.65)
 	border_color = accent_color if not is_locked else Color(0.35, 0.38, 0.42)
 	update_cooldown(skill)
 	queue_redraw()
@@ -84,6 +109,23 @@ func update_cooldown(skill: SkillData) -> void:
 		cooldown_ratio = 0.0
 	queue_redraw()
 
+func _draw_rainbow_border(r_box: Rect2, width: float) -> void:
+	var p0 := r_box.position
+	var p1 := Vector2(r_box.end.x, r_box.position.y)
+	var p2 := r_box.end
+	var p3 := Vector2(r_box.position.x, r_box.end.y)
+	var corners := [p0, p1, p2, p3]
+	var segs_per_side := 5
+	for side in range(4):
+		var a: Vector2 = corners[side]
+		var b: Vector2 = corners[(side + 1) % 4]
+		for k in range(segs_per_side):
+			var t0 := float(k) / float(segs_per_side)
+			var t1 := float(k + 1) / float(segs_per_side)
+			var hue := fmod(rainbow_hue + (float(side) + t0) * 0.25, 1.0)
+			var seg_col := Color.from_hsv(hue, 0.85, 1.0)
+			draw_line(a.lerp(b, t0), a.lerp(b, t1), seg_col, width)
+
 func _draw() -> void:
 	var s := size
 	if s.x <= 4 or s.y <= 4:
@@ -96,7 +138,11 @@ func _draw() -> void:
 	var bg_col := Color(0.11, 0.13, 0.18) if is_locked else Color(0.14, 0.17, 0.24).lerp(accent_color, 0.14)
 	draw_rect(rect, bg_col, true)
 	draw_rect(rect.grow(-3.0), Color(0.08, 0.09, 0.13, 0.65), true)
-	draw_rect(rect.grow(-1.0), border_color, false, 2.5)
+
+	if is_rainbow_border:
+		_draw_rainbow_border(rect.grow(-1.0), 3.0)
+	else:
+		draw_rect(rect.grow(-1.0), border_color, false, 2.5)
 
 	# 2. 繪製簡易幾何圖示 (Icon)
 	var col := Color(0.42, 0.45, 0.52, 0.55) if is_locked else accent_color
@@ -180,6 +226,19 @@ func _draw() -> void:
 				var y_off := idx * r * 0.32
 				draw_line(center + Vector2(-r * 0.48, y_off + 3), center + Vector2(r * 0.35, y_off - 4), light_col, 3.0)
 				draw_circle(center + Vector2(r * 0.38, y_off - 4), 2.5, col)
+
+		Kind.SKILL_CRIT:
+			# 狂暴之血：四角星芒爆裂圖示
+			draw_line(center + Vector2(0, -r * 0.58), center + Vector2(0, r * 0.58), light_col, 3.5)
+			draw_line(center + Vector2(-r * 0.58, 0), center + Vector2(r * 0.58, 0), light_col, 3.5)
+			draw_line(center + Vector2(-r * 0.38, -r * 0.38), center + Vector2(r * 0.38, r * 0.38), col, 2.5)
+			draw_line(center + Vector2(r * 0.38, -r * 0.38), center + Vector2(-r * 0.38, r * 0.38), col, 2.5)
+			draw_circle(center, r * 0.20, light_col)
+
+		Kind.SKILL_DEF_HP:
+			# 不屈壁壘：雙重加固盾徽
+			draw_arc(center, r * 0.48, 0.0, TAU, 6, light_col, 3.0)
+			draw_circle(center, r * 0.22, col)
 
 	# 3. 技能冷卻遮罩
 	if cooldown_ratio > 0.01:

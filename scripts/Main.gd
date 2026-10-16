@@ -22,13 +22,19 @@ extends Control
 # 戰鬥即時狀態
 var hero_hp: int = 120
 var hero_atk_timer: float = 0.0
+var is_reviving: bool = false
+var revive_timer: float = 0.0
+const REVIVE_DURATION: float = 5.0
 
 var enemy_name: String = "史萊姆"
 var enemy_max_hp: int = 45
 var enemy_hp: int = 45
 var enemy_atk: int = 6
-var enemy_aspd: float = 0.65
+var enemy_aspd: float = 1.0 # 怪物攻速固定為 1.0 次/秒，不再成長
 var enemy_atk_timer: float = 0.0
+var enemy_is_elite: bool = false
+var prev_enemy_max_hp: int = 45
+var prev_enemy_atk: int = 6
 
 # 技能圖示追蹤 (用於即時更新冷卻遮罩)
 var battle_skill_icons: Array[IconSlot] = []
@@ -138,22 +144,30 @@ func _setup_debug_mode_ui() -> void:
 	btn_lvl.add_theme_font_size_override("font_size", 12)
 	btn_lvl.pressed.connect(func():
 		GameManager.add_exp(GameManager.get_max_exp())
-		hero_hp = GameManager.get_total_max_hp()
 		_refresh_all_ui()
 	)
 	toolbar.add_child(btn_lvl)
 
-	var btn_stage := Button.new()
-	btn_stage.text = "跳下一關"
-	btn_stage.add_theme_font_size_override("font_size", 12)
-	btn_stage.pressed.connect(func():
-		GameManager.stage += 1
-		GameManager.wave = 1
+	var btn_kills := Button.new()
+	btn_kills.text = "+10 擊殺"
+	btn_kills.add_theme_font_size_override("font_size", 12)
+	btn_kills.pressed.connect(func():
+		GameManager.kill_count += 10
 		_spawn_enemy()
 		_refresh_all_ui()
-		_append_log("🛠️ [除錯] 跳轉至第 %d 關" % GameManager.stage)
+		_append_log("🛠️ [除錯] 累計擊殺 +10（目前 %d 隻）" % GameManager.kill_count)
 	)
-	toolbar.add_child(btn_stage)
+	toolbar.add_child(btn_kills)
+
+	var btn_elite := Button.new()
+	btn_elite.text = "必出菁英"
+	btn_elite.add_theme_font_size_override("font_size", 12)
+	btn_elite.pressed.connect(func():
+		GameManager.next_is_elite = true
+		_refresh_all_ui()
+		_append_log("🛠️ [除錯] 已預約下一隻怪物為【菁英怪】！")
+	)
+	toolbar.add_child(btn_elite)
 
 	var btn_clear := Button.new()
 	btn_clear.text = "清空紀錄"
@@ -169,6 +183,28 @@ func _process(delta: float) -> void:
 	_process_active_skills(delta)
 
 func _process_combat(delta: float) -> void:
+	# 若勇者正在復活詠唱中：暫停雙方普攻，敵人停止攻擊並維持原血量
+	if is_reviving:
+		revive_timer += delta
+		var progress_ratio := clampf(revive_timer / REVIVE_DURATION, 0.0, 1.0)
+		arena.is_reviving = true
+		arena.revive_ratio = progress_ratio
+		hero_atk_bar.value = progress_ratio * 100.0
+		_update_combat_bars()
+
+		if revive_timer >= REVIVE_DURATION:
+			is_reviving = false
+			revive_timer = 0.0
+			arena.is_reviving = false
+			arena.revive_ratio = 0.0
+			hero_hp = GameManager.get_total_max_hp()
+			hero_atk_timer = 0.0
+			hero_atk_bar.value = 0.0
+			_update_combat_bars()
+			_spawn_floating_text(arena.hero_pos + Vector2(0, -85), "✨ 復活完成！HP 全滿", Color(0.35, 1.0, 0.55))
+			_append_log("✨ 勇者完成復活詠唱，恢復全部生命並繼續戰鬥！")
+		return
+
 	# 勇者普攻讀條
 	var h_aspd := GameManager.get_total_aspd()
 	hero_atk_timer += delta * h_aspd
@@ -187,7 +223,7 @@ func _process_combat(delta: float) -> void:
 func _process_active_skills(delta: float) -> void:
 	for i in range(GameManager.skills.size()):
 		var s: SkillData = GameManager.skills[i]
-		if s.is_learned() and s.is_active_skill():
+		if not is_reviving and s.is_learned() and s.is_active_skill():
 			s.current_cd -= delta
 			if s.current_cd <= 0.0:
 				s.current_cd = s.cooldown
@@ -200,10 +236,11 @@ func _process_active_skills(delta: float) -> void:
 func _cast_active_skill(skill: SkillData) -> void:
 	match skill.skill_type:
 		SkillData.SkillType.ACTIVE_DAMAGE:
-			_append_log("🔥 施放技能【%s】！" % skill.skill_name)
-			_perform_hero_attack(skill.get_effect_value(), true)
+			var dmg_mult := skill.roll_damage_multiplier()
+			_append_log("🔥 施放技能【%s】(%.0f%% 傷害)！" % [skill.skill_name, dmg_mult * 100.0])
+			_perform_hero_attack(dmg_mult, true)
 		SkillData.SkillType.ACTIVE_HEAL:
-			var heal_amount := int(round(GameManager.get_total_max_hp() * skill.get_effect_value()))
+			var heal_amount := maxi(1, int(round(GameManager.get_total_max_hp() * skill.get_effect_value())))
 			hero_hp = mini(GameManager.get_total_max_hp(), hero_hp + heal_amount)
 			_update_combat_bars()
 			_spawn_floating_text(arena.hero_pos + Vector2(0, -85), "+%d HP" % heal_amount, Color(0.3, 1.0, 0.45))
@@ -213,8 +250,9 @@ func _perform_hero_attack(dmg_multiplier: float, is_skill: bool) -> void:
 	arena.trigger_hero_attack()
 	arena.trigger_enemy_hit(is_skill)
 
-	var is_crit := randf() < 0.15
-	var raw_dmg := int(round(GameManager.get_total_atk() * dmg_multiplier * (1.6 if is_crit else 1.0)))
+	var is_crit := randf() < GameManager.get_total_crit_rate()
+	var crit_mult := GameManager.get_total_crit_dmg() if is_crit else 1.0
+	var raw_dmg := int(round(GameManager.get_total_atk() * dmg_multiplier * crit_mult))
 	raw_dmg = maxi(1, raw_dmg)
 	enemy_hp = maxi(0, enemy_hp - raw_dmg)
 	_update_combat_bars()
@@ -231,66 +269,151 @@ func _perform_enemy_attack() -> void:
 	arena.trigger_hero_hit()
 
 	var dmg := maxi(1, enemy_atk - GameManager.get_total_def())
+	var is_blocked := randf() < GameManager.get_block_chance()
+	if is_blocked:
+		dmg = maxi(1, int(round(dmg * (1.0 - GameManager.get_block_reduction()))))
+
 	hero_hp = maxi(0, hero_hp - dmg)
 	_update_combat_bars()
-	_spawn_floating_text(arena.hero_pos + Vector2(randf_range(-15, 15), -85), "-%d" % dmg, Color(1.0, 0.35, 0.35))
+
+	if is_blocked:
+		_spawn_floating_text(arena.hero_pos + Vector2(randf_range(-15, 15), -85), "🛡️格檔! -%d" % dmg, Color(0.45, 0.9, 1.0))
+		_append_log("🛡️ 觸發【格檔】！減免 30%% 傷害，僅受到 %d 點傷害。" % dmg)
+	else:
+		_spawn_floating_text(arena.hero_pos + Vector2(randf_range(-15, 15), -85), "-%d" % dmg, Color(1.0, 0.35, 0.35))
 
 	if hero_hp <= 0:
 		_on_hero_defeated()
 
 func _on_enemy_defeated() -> void:
-	var is_boss := (GameManager.wave == GameManager.max_waves_per_stage)
-	var gold_reward := (8 + GameManager.stage * 6) * (3 if is_boss else 1)
-	var exp_reward := (12 + GameManager.stage * 8) * (3 if is_boss else 1)
+	# 紀錄上一隻怪物的屬性（供下一隻菁英怪以 N 倍放大）
+	prev_enemy_max_hp = enemy_max_hp
+	prev_enemy_atk = enemy_atk
+
+	GameManager.kill_count += 1
+	var tier := GameManager.get_current_tier()
+	var reward_mult := int(round(GameManager.elite_stat_multiplier)) if enemy_is_elite else 1
+
+	# 金幣不隨累計擊殺持續成長（一般怪穩定掉落 10~15 金幣，菁英怪乘上倍率）
+	var gold_reward := randi_range(10, 15) * reward_mult
+	var exp_reward := (12 + GameManager.kill_count * 3) * reward_mult
 
 	GameManager.add_gold(gold_reward)
 	GameManager.add_exp(exp_reward)
 
-	# 掉寶判定：一般怪 22% 掉落裝備，Boss 100% 掉落裝備
-	var drop_chance := 1.0 if is_boss else 0.22
+	# 掉寶判定：一般怪大幅降低掉寶率 (5%) 與品質；菁英怪 100% 掉落高品質裝備
+	var drop_chance := 1.0 if enemy_is_elite else 0.05
 	if randf() < drop_chance:
-		var drop := GameManager.generate_random_equipment(GameManager.stage)
-		GameManager.inventory.append(drop)
-		_append_log("🎁 擊敗 %s 掉落了裝備【%s】！" % [enemy_name, drop.item_name])
-		GameManager.equipment_changed.emit()
+		var source_type := "elite" if enemy_is_elite else "normal"
+		var drop := GameManager.generate_random_equipment(tier, source_type)
+		if enemy_is_elite:
+			_append_log("💎 擊敗 %s 爆出了高品質裝備【%s】！" % [enemy_name, drop.item_name])
+		else:
+			_append_log("🎁 擊敗 %s 爆出了裝備【%s】！" % [enemy_name, drop.item_name])
+		_spawn_item_drop_animation(drop, arena.enemy_pos)
 
-	# 推進波數與關卡
-	GameManager.wave += 1
-	if GameManager.wave > GameManager.max_waves_per_stage:
-		GameManager.wave = 1
-		if GameManager.auto_advance_stage:
-			GameManager.stage += 1
-			_append_log("🚩 突破成功！進入第 %d 關！" % GameManager.stage)
+	# 每次擊殺一般怪物時，有一定機率觸發下一隻為「菁英怪」
+	if not enemy_is_elite and not GameManager.next_is_elite:
+		if randf() < GameManager.elite_spawn_chance:
+			GameManager.next_is_elite = true
+			_spawn_floating_text(arena.enemy_pos + Vector2(-40, -115), "⚠️ 觸發菁英怪來襲！", Color(1.0, 0.35, 0.35))
+			_append_log("⚠️ 殺氣凝聚！下一隻登場的將是強度 %.1f 倍的【菁英怪】！" % GameManager.elite_stat_multiplier)
 
 	_spawn_enemy()
 	_refresh_all_ui()
+
+func _spawn_item_drop_animation(item: EquipmentData, origin_pos: Vector2) -> void:
+	var fx := DroppedItemFX.new(item)
+	# 起始位置：怪物胸口
+	fx.position = origin_pos - Vector2(28, 28)
+	fx.scale = Vector2(0.4, 0.4)
+	fx.modulate.a = 0.0
+	$BattleViewport.add_child(fx)
+
+	# 1. 噴射跳躍至地面 (拋物線噴發)
+	var ground_y := 235.0 - 28.0 + randf_range(-8.0, 15.0)
+	var land_x := clampf(origin_pos.x + randf_range(-70.0, 60.0), 380.0, 660.0)
+	var apex_y := origin_pos.y - randf_range(55.0, 85.0)
+
+	var tw := create_tween()
+	# 出現淡入 + 變大
+	tw.parallel().tween_property(fx, "modulate:a", 1.0, 0.12)
+	tw.parallel().tween_property(fx, "scale", Vector2(1.15, 1.15), 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	# X 軸水平噴出
+	tw.parallel().tween_property(fx, "position:x", land_x, 0.42).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	# Y 軸先向上再墜落觸地
+	tw.parallel().tween_property(fx, "position:y", apex_y, 0.18).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.chain().tween_property(fx, "position:y", ground_y, 0.24).set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(fx, "scale", Vector2(1.0, 1.0), 0.24)
+
+	# 2. 地面掉落文字提示 + 閃耀停留片刻 (越高品階停留稍長，展示耀眼光芒)
+	var ground_wait := 0.35 + item.rarity * 0.08
+	tw.chain().tween_callback(func():
+		var rarity_tag := "[%s] " % item.get_rarity_name()
+		_spawn_floating_text(Vector2(land_x, ground_y - 25), "%s%s" % [rarity_tag, item.item_name], item.get_rarity_color())
+	)
+	tw.chain().tween_interval(ground_wait)
+
+	# 3. 飛向背包區域 (朝下方 UI 面板飛入收納)
+	var target_fly_pos := Vector2(360.0 - 28.0, 310.0 + 35.0)
+	tw.chain().tween_property(fx, "position", target_fly_pos, 0.38).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+	tw.parallel().tween_property(fx, "scale", Vector2(0.35, 0.35), 0.38).set_trans(Tween.TRANS_QUAD)
+	tw.parallel().tween_property(fx, "modulate:a", 0.75, 0.38)
+
+	# 4. 到達背包：收入背包資料結構並釋放特效節點
+	tw.chain().tween_callback(func():
+		GameManager.inventory.append(item)
+		GameManager.equipment_changed.emit()
+		_spawn_floating_text(Vector2(320.0, 275.0), "+1 裝備已收入背包", Color(0.4, 1.0, 0.6))
+		fx.queue_free()
+	)
 
 func _on_hero_defeated() -> void:
-	_append_log("💀 勇者力竭倒下！退回第 1 波並恢復全部生命。")
-	GameManager.wave = 1
-	if GameManager.stage > 1:
-		GameManager.stage -= 1
-	hero_hp = GameManager.get_total_max_hp()
-	_spawn_enemy()
-	_refresh_all_ui()
+	is_reviving = true
+	revive_timer = 0.0
+	hero_hp = 0
+	hero_atk_timer = 0.0
+	hero_atk_bar.value = 0.0
+	arena.is_reviving = true
+	arena.revive_ratio = 0.0
+	_spawn_floating_text(arena.hero_pos + Vector2(0, -85), "⏳ 復活詠唱中 (5.0s)...", Color(0.45, 0.85, 1.0))
+	_append_log("💀 勇者倒下了！開始 5 秒「復活詠唱」，敵人暫停攻擊。")
+	_update_combat_bars()
 
 func _spawn_enemy() -> void:
-	var s := GameManager.stage
-	var is_boss := (GameManager.wave == GameManager.max_waves_per_stage)
+	var k := GameManager.kill_count
 	var monster_names := ["翠綠史萊姆", "狂暴哥布林", "暗影骷髏兵", "雙頭魔狼", "深淵石像鬼"]
-	var base_name: String = monster_names[(s - 1) % monster_names.size()]
+	var base_name: String = monster_names[k % monster_names.size()]
 
-	enemy_is_boss_setup(is_boss, s)
-	enemy_name = ("【首領】" + base_name + "王") if is_boss else base_name
-	enemy_max_hp = int((38 + pow(s, 1.45) * 28) * (2.6 if is_boss else 1.0))
-	enemy_hp = enemy_max_hp
-	enemy_atk = int((5 + pow(s, 1.3) * 4) * (1.5 if is_boss else 1.0))
-	enemy_aspd = 0.65 + minf(0.5, s * 0.03)
+	enemy_is_elite = GameManager.next_is_elite
+	GameManager.next_is_elite = false
+
+	enemy_is_boss_setup(enemy_is_elite, k + 1)
+
+	if enemy_is_elite:
+		# 菁英怪：強度為上一隻怪物的 N 倍 (GameManager.elite_stat_multiplier = 1.5)，攻速固定為 1.0
+		var mult := GameManager.elite_stat_multiplier
+		enemy_name = "【菁英】" + base_name
+		enemy_max_hp = maxi(1, int(round(prev_enemy_max_hp * mult)))
+		enemy_hp = enemy_max_hp
+		enemy_atk = maxi(1, int(round(prev_enemy_atk * mult)))
+		enemy_aspd = 1.0
+	else:
+		# 一般怪物：平滑降低成長曲線，讓玩家升級與換裝的速度能穩定壓制敵人
+		enemy_name = base_name
+		enemy_max_hp = int(38 + k * 5.0 + pow(k, 1.08) * 1.5)
+		enemy_hp = enemy_max_hp
+		enemy_atk = int(5 + k * 0.45 + pow(k, 1.03) * 0.2)
+		enemy_aspd = 1.0
+		# 更新最近一隻一般怪基準
+		prev_enemy_max_hp = enemy_max_hp
+		prev_enemy_atk = enemy_atk
+
 	enemy_atk_timer = 0.0
 	_update_combat_bars()
 
-func enemy_is_boss_setup(is_boss: bool, stage_num: int) -> void:
-	arena.enemy_is_boss = is_boss
+func enemy_is_boss_setup(is_elite: bool, color_index: int) -> void:
+	arena.enemy_is_boss = is_elite
 	var palette := [
 		Color(0.35, 0.85, 0.45),
 		Color(0.85, 0.45, 0.25),
@@ -298,7 +421,7 @@ func enemy_is_boss_setup(is_boss: bool, stage_num: int) -> void:
 		Color(0.25, 0.75, 0.85),
 		Color(0.85, 0.25, 0.45)
 	]
-	arena.enemy_color = palette[(stage_num - 1) % palette.size()]
+	arena.enemy_color = palette[(color_index - 1) % palette.size()]
 	arena.queue_redraw()
 
 func _spawn_floating_text(pos: Vector2, text: String, col: Color) -> void:
@@ -324,8 +447,13 @@ func _on_stats_changed() -> void:
 func _update_combat_bars() -> void:
 	var max_hp := GameManager.get_total_max_hp()
 	hero_hp_bar.max_value = max_hp
-	hero_hp_bar.value = hero_hp
-	$BattleViewport/HeroHUD/HPLabel.text = "勇者 HP: %d / %d" % [hero_hp, max_hp]
+	if is_reviving:
+		hero_hp_bar.value = int(round(max_hp * clampf(revive_timer / REVIVE_DURATION, 0.0, 1.0)))
+		var remain := maxf(0.0, REVIVE_DURATION - revive_timer)
+		$BattleViewport/HeroHUD/HPLabel.text = "✨ 復活詠唱中... (%.1fs)" % remain
+	else:
+		hero_hp_bar.value = hero_hp
+		$BattleViewport/HeroHUD/HPLabel.text = "勇者 HP: %d / %d" % [hero_hp, max_hp]
 
 	enemy_name_label.text = "%s (攻擊:%d)" % [enemy_name, enemy_atk]
 	enemy_hp_bar.max_value = enemy_max_hp
@@ -333,10 +461,16 @@ func _update_combat_bars() -> void:
 	$BattleViewport/EnemyHUD/HPLabel.text = "HP: %d / %d" % [enemy_hp, enemy_max_hp]
 
 func _refresh_all_ui() -> void:
-	stage_label.text = "第 %d 關 - 波次 %d / %d" % [GameManager.stage, GameManager.wave, GameManager.max_waves_per_stage]
-	stats_label.text = "Lv.%d 勇者   |   💰 金幣: %d\n❤️ 生命: %d   ⚔️ 攻擊: %d   🛡️ 防禦: %d   ⚡ 攻速: %.2f/秒" % [
+	var elite_tag := ("   |   🔥 當前: 菁英怪 (%.1fx)" % GameManager.elite_stat_multiplier) if enemy_is_elite else (
+		"   |   ⚠️ 下一隻: 菁英怪！" if GameManager.next_is_elite else ""
+	)
+	stage_label.text = "💀 累計討伐: %d 隻%s" % [GameManager.kill_count, elite_tag]
+	stats_label.text = "Lv.%d 勇者  |  💰 金幣: %d  |  📘 技能點: %d  |  💥 暴率: %.1f%%  |  🔥 暴傷: %.2fx\n❤️ 生命: %d   ⚔️ 攻擊: %d   🛡️ 防禦: %d   ⚡ 攻速: %.2f/秒" % [
 		GameManager.level,
 		GameManager.gold,
+		GameManager.skill_points,
+		GameManager.get_total_crit_rate() * 100.0,
+		GameManager.get_total_crit_dmg(),
 		GameManager.get_total_max_hp(),
 		GameManager.get_total_atk(),
 		GameManager.get_total_def(),
@@ -401,7 +535,7 @@ func _refresh_equipment_ui() -> void:
 
 		var upg_btn := Button.new()
 		if item != null:
-			name_lbl.text = "%s +%d" % [item.item_name, item.level]
+			name_lbl.text = "[%s] %s +%d" % [item.get_rarity_name(), item.item_name, item.level]
 			name_lbl.add_theme_color_override("font_color", item.get_rarity_color())
 			stat_lbl.text = "%s (戰力:%d)" % [item.get_summary_text(), item.get_power_score()]
 			var cost := item.get_upgrade_cost()
@@ -481,7 +615,7 @@ func _refresh_equipment_ui() -> void:
 			var cmp_tag := "🔼較強" if is_stronger else ("🔽較弱" if is_weaker else "🟰持平")
 
 			var title_lbl := Label.new()
-			title_lbl.text = "%s +%d  [%s]" % [inv_item.item_name, inv_item.level, cmp_tag]
+			title_lbl.text = "[%s] %s +%d  [%s]" % [inv_item.get_rarity_name(), inv_item.item_name, inv_item.level, cmp_tag]
 			title_lbl.add_theme_color_override("font_color", inv_item.get_rarity_color())
 			title_lbl.add_theme_font_size_override("font_size", 14)
 
@@ -527,52 +661,121 @@ func _refresh_skills_ui() -> void:
 	for c in skill_list_vbox.get_children():
 		c.queue_free()
 	tab_skill_icons.clear()
+	tab_skill_icons.resize(GameManager.skills.size())
 
-	for i in range(GameManager.skills.size()):
-		var s: SkillData = GameManager.skills[i]
-		var panel := PanelContainer.new()
+	# 顯示目前可用技能點數橫幅與「重置技能」按鈕
+	var header_row := HBoxContainer.new()
+	header_row.add_theme_constant_override("separation", 10)
+	skill_list_vbox.add_child(header_row)
 
-		var margin := MarginContainer.new()
-		margin.add_theme_constant_override("margin_left", 8)
-		margin.add_theme_constant_override("margin_top", 6)
-		margin.add_theme_constant_override("margin_right", 8)
-		margin.add_theme_constant_override("margin_bottom", 6)
-		panel.add_child(margin)
+	var sp_header := Label.new()
+	sp_header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sp_header.text = "📘 可用技能點: %d 點  （每升 1 級獲得 1 點）" % GameManager.skill_points
+	sp_header.add_theme_font_size_override("font_size", 14)
+	sp_header.add_theme_color_override(
+		"font_color",
+		Color(0.45, 0.95, 0.6) if GameManager.skill_points > 0 else Color(0.75, 0.78, 0.85)
+	)
+	header_row.add_child(sp_header)
 
-		var hbox := HBoxContainer.new()
-		hbox.add_theme_constant_override("separation", 12)
-		margin.add_child(hbox)
+	var spent_sp := GameManager.get_spent_skill_points()
+	var reset_btn := Button.new()
+	reset_btn.custom_minimum_size = Vector2(140, 32)
+	reset_btn.add_theme_font_size_override("font_size", 13)
+	reset_btn.text = ("🔄 重置技能 (+%d點)" % spent_sp) if spent_sp > 0 else "🔄 重置技能"
+	reset_btn.disabled = (spent_sp <= 0)
+	reset_btn.pressed.connect(func():
+		var refunded := GameManager.reset_skills()
+		if refunded > 0:
+			_spawn_floating_text(Vector2(280, 260), "🔄 技能已重置！退回 %d 點技能點" % refunded, Color(0.45, 0.9, 1.0))
+	)
+	header_row.add_child(reset_btn)
 
-		# 技能視覺圖示槽 (含即時冷卻動畫)
-		var icon := IconSlot.new(Vector2(56, 56))
-		icon.setup_skill(s)
-		hbox.add_child(icon)
-		tab_skill_icons.append(icon)
+	# 依三大技能流派分類顯示：狂暴、鐵衛、戰術
+	var categories := [
+		SkillData.Category.BERSERK,
+		SkillData.Category.IRON_GUARD,
+		SkillData.Category.TACTICS
+	]
+	var cat_titles := {
+		SkillData.Category.BERSERK: "🔥【狂暴】— 爆發輸出與致命暴擊",
+		SkillData.Category.IRON_GUARD: "🛡️【鐵衛】— 聖光恢復與銅牆鐵壁",
+		SkillData.Category.TACTICS: "⚡【戰術】— 武技專精與疾風攻速"
+	}
+	var cat_colors := {
+		SkillData.Category.BERSERK: Color(1.0, 0.48, 0.35),
+		SkillData.Category.IRON_GUARD: Color(0.38, 0.9, 0.58),
+		SkillData.Category.TACTICS: Color(0.4, 0.82, 1.0)
+	}
 
-		var vbox := VBoxContainer.new()
-		vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		vbox.alignment = BoxContainer.ALIGNMENT_CENTER
-		var title := Label.new()
-		title.text = "%s  (Lv.%d)" % [s.skill_name, s.level]
-		title.add_theme_color_override("font_color", Color(1.0, 0.85, 0.35) if s.is_learned() else Color(0.7, 0.7, 0.75))
-		var desc := Label.new()
-		desc.text = s.get_display_desc()
-		desc.add_theme_font_size_override("font_size", 13)
-		desc.add_theme_color_override("font_color", Color(0.82, 0.86, 0.92))
-		vbox.add_child(title)
-		vbox.add_child(desc)
+	for cat in categories:
+		var cat_lbl := Label.new()
+		cat_lbl.text = cat_titles[cat]
+		cat_lbl.add_theme_font_size_override("font_size", 14)
+		cat_lbl.add_theme_color_override("font_color", cat_colors[cat])
+		skill_list_vbox.add_child(cat_lbl)
 
-		var btn := Button.new()
-		var cost := s.get_upgrade_cost()
-		btn.custom_minimum_size = Vector2(110, 42)
-		btn.text = "%s (%dG)" % [("學習" if s.level == 0 else "升級"), cost]
-		btn.disabled = GameManager.gold < cost
-		var idx := i
-		btn.pressed.connect(func(): GameManager.upgrade_skill(idx))
+		for i in range(GameManager.skills.size()):
+			var s: SkillData = GameManager.skills[i]
+			if s.category != cat:
+				continue
 
-		hbox.add_child(vbox)
-		hbox.add_child(btn)
-		skill_list_vbox.add_child(panel)
+			var panel := PanelContainer.new()
+
+			var margin := MarginContainer.new()
+			margin.add_theme_constant_override("margin_left", 8)
+			margin.add_theme_constant_override("margin_top", 6)
+			margin.add_theme_constant_override("margin_right", 8)
+			margin.add_theme_constant_override("margin_bottom", 6)
+			panel.add_child(margin)
+
+			var hbox := HBoxContainer.new()
+			hbox.add_theme_constant_override("separation", 12)
+			margin.add_child(hbox)
+
+			# 技能視覺圖示槽 (含即時冷卻動畫)
+			var icon := IconSlot.new(Vector2(54, 54))
+			icon.setup_skill(s)
+			hbox.add_child(icon)
+			tab_skill_icons[i] = icon
+
+			var level_unlocked := (GameManager.level >= s.required_level)
+
+			var vbox := VBoxContainer.new()
+			vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+			var title := Label.new()
+			var req_tag := "" if s.is_learned() else ("  [需勇者 Lv.%d]" % s.required_level)
+			title.text = "%s  (Lv.%d)%s" % [s.skill_name, s.level, req_tag]
+			if s.is_learned():
+				title.add_theme_color_override("font_color", Color(1.0, 0.85, 0.35))
+			elif level_unlocked:
+				title.add_theme_color_override("font_color", Color(0.88, 0.9, 0.95))
+			else:
+				title.add_theme_color_override("font_color", Color(0.95, 0.45, 0.45))
+
+			var desc := Label.new()
+			desc.text = s.get_display_desc()
+			desc.add_theme_font_size_override("font_size", 12)
+			desc.add_theme_color_override("font_color", Color(0.82, 0.86, 0.92))
+			vbox.add_child(title)
+			vbox.add_child(desc)
+
+			var btn := Button.new()
+			var cost := s.get_upgrade_cost()
+			btn.custom_minimum_size = Vector2(120, 42)
+			if not level_unlocked:
+				btn.text = "🔒 需 Lv.%d" % s.required_level
+				btn.disabled = true
+			else:
+				btn.text = "%s (%d點)" % [("學習" if s.level == 0 else "升級"), cost]
+				btn.disabled = GameManager.skill_points < cost
+			var idx := i
+			btn.pressed.connect(func(): GameManager.upgrade_skill(idx))
+
+			hbox.add_child(vbox)
+			hbox.add_child(btn)
+			skill_list_vbox.add_child(panel)
 
 func _append_log(msg: String) -> void:
 	if log_label == null:

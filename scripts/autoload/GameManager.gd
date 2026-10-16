@@ -10,20 +10,23 @@ signal combat_log_added(text: String)
 
 const SAVE_PATH := "user://idle_rpg_save.json"
 
-# 玩家基礎數值與進度
+# 玩家基礎數值與無盡討伐進度
 var level: int = 1
 var current_exp: int = 0
 var gold: int = 50
-var stage: int = 1
-var wave: int = 1
-var max_waves_per_stage: int = 5
-var auto_advance_stage: bool = true
+var skill_points: int = 0
+var kill_count: int = 0 # 累計擊殺怪物數量（越殺越強）
+var next_is_elite: bool = false # 下一隻是否已被觸發為菁英怪
+var elite_spawn_chance: float = 0.20 # 擊殺一般怪後觸發下一隻為菁英怪的機率 (20%)
+var elite_stat_multiplier: float = 1.5 # 菁英怪強度為上一隻怪物的 N 倍 (1.5 倍)
 
 # 基礎屬性
 var base_max_hp: int = 120
 var base_atk: int = 14
 var base_def: int = 3
 var base_aspd: float = 1.0 # 每秒攻擊次數
+var base_crit_rate: float = 0.05 # 初始暴擊率 5%
+var base_crit_dmg: float = 1.5 # 初始暴擊倍率 1.5倍 (未觸發為 1.0倍)
 
 # 裝備系統：目前穿戴的 3 個部位 (武器、裝甲、盾牌) 與背包清單
 var equipped: Dictionary = {
@@ -43,47 +46,83 @@ func _ready() -> void:
 func _init_default_skills() -> void:
 	skills.clear()
 
+	# 1. 🔥 狂暴系 (BERSERK)
 	var s1 := SkillData.new()
-	s1.id = "power_slash"
-	s1.skill_name = "烈焰重斬 (主動)"
+	s1.id = "reckless"
+	s1.skill_name = "魯莽 (主動)"
+	s1.category = SkillData.Category.BERSERK
 	s1.skill_type = SkillData.SkillType.ACTIVE_DAMAGE
+	s1.required_level = 1
 	s1.level = 1
 	s1.cooldown = 4.5
-	s1.base_value = 2.2
-	s1.growth_per_level = 0.45
-	s1.base_cost = 25
+	s1.base_value = 1.50 # 150%
+	s1.max_value = 2.50 # 250%
+	s1.growth_per_level = 0.25 # 每級上下限各 +25%
+	s1.base_cost = 1
 	skills.append(s1)
 
 	var s2 := SkillData.new()
-	s2.id = "holy_light"
-	s2.skill_name = "聖光治癒 (主動)"
-	s2.skill_type = SkillData.SkillType.ACTIVE_HEAL
+	s2.id = "lethal"
+	s2.skill_name = "致命 (被動)"
+	s2.category = SkillData.Category.BERSERK
+	s2.skill_type = SkillData.SkillType.PASSIVE_CRIT
+	s2.required_level = 4
 	s2.level = 0
-	s2.cooldown = 8.0
-	s2.base_value = 0.25
-	s2.growth_per_level = 0.05
-	s2.base_cost = 40
+	s2.base_value = 0.05 # 初始 +5% 暴擊傷害
+	s2.growth_per_level = 0.05 # 每級 +5% 暴擊傷害
+	s2.base_cost = 1
 	skills.append(s2)
 
+	# 2. 🛡️ 鐵衛系 (IRON_GUARD)
 	var s3 := SkillData.new()
-	s3.id = "sword_mastery"
-	s3.skill_name = "劍術專精 (被動)"
-	s3.skill_type = SkillData.SkillType.PASSIVE_ATK
+	s3.id = "first_aid"
+	s3.skill_name = "急救 (主動)"
+	s3.category = SkillData.Category.IRON_GUARD
+	s3.skill_type = SkillData.SkillType.ACTIVE_HEAL
+	s3.required_level = 2
 	s3.level = 0
-	s3.base_value = 0.15
-	s3.growth_per_level = 0.10
-	s3.base_cost = 35
+	s3.cooldown = 5.0 # 每 5 秒
+	s3.base_value = 0.01 # 回復 1% 生命
+	s3.growth_per_level = 0.005 # 每級 +0.5%
+	s3.base_cost = 1
 	skills.append(s3)
 
 	var s4 := SkillData.new()
-	s4.id = "wind_blessing"
-	s4.skill_name = "疾風祝福 (被動)"
-	s4.skill_type = SkillData.SkillType.PASSIVE_ASPD
+	s4.id = "block"
+	s4.skill_name = "格檔 (被動)"
+	s4.category = SkillData.Category.IRON_GUARD
+	s4.skill_type = SkillData.SkillType.PASSIVE_BLOCK
+	s4.required_level = 5
 	s4.level = 0
-	s4.base_value = 0.12
-	s4.growth_per_level = 0.08
-	s4.base_cost = 45
+	s4.base_value = 0.20 # 20% 機率減免 30% 傷害
+	s4.growth_per_level = 0.01 # 每級 +1% 機率
+	s4.base_cost = 1
 	skills.append(s4)
+
+	# 3. ⚡ 戰術系 (TACTICS)
+	var s5 := SkillData.new()
+	s5.id = "sword_mastery"
+	s5.skill_name = "劍術專精 (被動)"
+	s5.category = SkillData.Category.TACTICS
+	s5.skill_type = SkillData.SkillType.PASSIVE_ATK
+	s5.required_level = 3
+	s5.level = 0
+	s5.base_value = 0.15
+	s5.growth_per_level = 0.10
+	s5.base_cost = 1
+	skills.append(s5)
+
+	var s6 := SkillData.new()
+	s6.id = "wind_blessing"
+	s6.skill_name = "疾風祝福 (被動)"
+	s6.category = SkillData.Category.TACTICS
+	s6.skill_type = SkillData.SkillType.PASSIVE_ASPD
+	s6.required_level = 6
+	s6.level = 0
+	s6.base_value = 0.12
+	s6.growth_per_level = 0.08
+	s6.base_cost = 1
+	skills.append(s6)
 
 func _init_starter_equipment() -> void:
 	var starter_sword := EquipmentData.new()
@@ -147,6 +186,33 @@ func get_total_aspd() -> float:
 			mult += s.get_effect_value()
 	return snappedf(total * mult, 0.01)
 
+func get_total_crit_rate() -> float:
+	var total := base_crit_rate
+	for item: EquipmentData in equipped.values():
+		if item != null:
+			total += item.get_crit_rate()
+	return clampf(total, 0.0, 1.0)
+
+func get_total_crit_dmg() -> float:
+	var total := base_crit_dmg
+	for item: EquipmentData in equipped.values():
+		if item != null:
+			total += item.get_crit_dmg()
+	for s in skills:
+		if s.is_learned() and s.skill_type == SkillData.SkillType.PASSIVE_CRIT:
+			total += s.get_effect_value()
+	return snappedf(total, 0.01)
+
+func get_block_chance() -> float:
+	var total := 0.0
+	for s in skills:
+		if s.is_learned() and s.skill_type == SkillData.SkillType.PASSIVE_BLOCK:
+			total += s.get_effect_value()
+	return clampf(total, 0.0, 0.90)
+
+func get_block_reduction() -> float:
+	return 0.30
+
 func get_max_exp() -> int:
 	return int(30 * pow(1.35, level - 1))
 
@@ -163,14 +229,16 @@ func spend_gold(amount: int) -> bool:
 
 func add_exp(amount: int) -> void:
 	current_exp += amount
-	var leveled_up := false
+	var gained_levels := 0
 	while current_exp >= get_max_exp():
 		current_exp -= get_max_exp()
 		level += 1
-		leveled_up = true
+		skill_points += 1
+		gained_levels += 1
 	exp_changed.emit(current_exp, get_max_exp(), level)
-	if leveled_up:
-		combat_log_added.emit("🎉 勇者升到了 Lv.%d！全屬性提升！" % level)
+	if gained_levels > 0:
+		combat_log_added.emit("🎉 勇者升到了 Lv.%d！獲得 %d 點技能點（目前共 %d 點）！" % [level, gained_levels, skill_points])
+		skills_changed.emit()
 		stats_changed.emit()
 
 # 裝備操作：強化已穿戴裝備
@@ -284,20 +352,58 @@ func auto_sell_weaker() -> Dictionary:
 		equipment_changed.emit()
 	return {"count": sold_count, "gold": total_gold}
 
-# 隨機生成一件裝備（打怪掉落或鐵匠鍛造）
-func generate_random_equipment(stage_tier: int) -> EquipmentData:
+# 隨機生成一件裝備（source_type: "normal" 一般怪低品質, "elite" 菁英怪高品質, "forge" 鐵匠鍛造）
+func generate_random_equipment(stage_tier: int, source_type: String = "forge") -> EquipmentData:
 	var item := EquipmentData.new()
 	var slot_roll := randi() % 3
 	var rarity_roll := randf()
-	if rarity_roll < 0.12:
-		item.rarity = 3
-	elif rarity_roll < 0.40:
-		item.rarity = 2
-	else:
-		item.rarity = 1
 
-	var prefix_map := {1: "精鋼", 2: "秘銀", 3: "龍血"}
-	var prefix: String = prefix_map[item.rarity]
+	match source_type:
+		"normal":
+			# 一般怪物：低品階（80% 白裝、18% 綠裝、2% 藍裝）
+			if rarity_roll < 0.02:
+				item.rarity = EquipmentData.Rarity.BLUE
+			elif rarity_roll < 0.20:
+				item.rarity = EquipmentData.Rarity.GREEN
+			else:
+				item.rarity = EquipmentData.Rarity.WHITE
+		"elite":
+			# 菁英怪物：必為高品階（40% 藍裝、35% 紫裝、18% 橘裝、7% 彩虹框神話裝）
+			if rarity_roll < 0.07:
+				item.rarity = EquipmentData.Rarity.RAINBOW
+			elif rarity_roll < 0.25:
+				item.rarity = EquipmentData.Rarity.ORANGE
+			elif rarity_roll < 0.60:
+				item.rarity = EquipmentData.Rarity.PURPLE
+			else:
+				item.rarity = EquipmentData.Rarity.BLUE
+		_:
+			# 鐵匠鍛造：全品階皆可鍛造（40% 白、30% 綠、16% 藍、9% 紫、4% 橘、1% 彩虹框）
+			if rarity_roll < 0.01:
+				item.rarity = EquipmentData.Rarity.RAINBOW
+			elif rarity_roll < 0.05:
+				item.rarity = EquipmentData.Rarity.ORANGE
+			elif rarity_roll < 0.14:
+				item.rarity = EquipmentData.Rarity.PURPLE
+			elif rarity_roll < 0.30:
+				item.rarity = EquipmentData.Rarity.BLUE
+			elif rarity_roll < 0.60:
+				item.rarity = EquipmentData.Rarity.GREEN
+			else:
+				item.rarity = EquipmentData.Rarity.WHITE
+
+	var prefix_map := {
+		EquipmentData.Rarity.WHITE: "粗鐵",
+		EquipmentData.Rarity.GREEN: "精鋼",
+		EquipmentData.Rarity.BLUE: "秘銀",
+		EquipmentData.Rarity.PURPLE: "暗金",
+		EquipmentData.Rarity.ORANGE: "龍血",
+		EquipmentData.Rarity.RAINBOW: "天界幻彩"
+	}
+	var prefix: String = prefix_map.get(item.rarity, "粗鐵")
+
+	# 菁英怪掉落的裝備有額外 +25% 基礎屬性加成，一般怪掉落則為 80% 基礎屬性
+	var stat_mult := 1.25 if source_type == "elite" else (0.80 if source_type == "normal" else 1.0)
 
 	match slot_roll:
 		0:
@@ -305,46 +411,91 @@ func generate_random_equipment(stage_tier: int) -> EquipmentData:
 			item.slot = EquipmentData.SlotType.WEAPON
 			var names := ["短劍", "長劍", "巨劍", "魔劍"]
 			item.item_name = "%s%s" % [prefix, names[randi() % names.size()]]
-			item.base_atk = 6 + stage_tier * 4 + randi_range(0, 3)
+			item.base_atk = maxi(1, int(round((6 + stage_tier * 4 + randi_range(0, 3)) * stat_mult)))
 		1:
 			# 裝甲 - 主要提供血量
 			item.slot = EquipmentData.SlotType.ARMOR
 			var names := ["皮甲", "胸甲", "重鎧", "戰甲"]
 			item.item_name = "%s%s" % [prefix, names[randi() % names.size()]]
-			item.base_hp = 35 + stage_tier * 25 + randi_range(0, 15)
+			item.base_hp = maxi(5, int(round((35 + stage_tier * 25 + randi_range(0, 15)) * stat_mult)))
 		2:
 			# 盾牌 - 主要提供防禦力
 			item.slot = EquipmentData.SlotType.SHIELD
 			var names := ["圓盾", "方盾", "塔盾", "聖盾"]
 			item.item_name = "%s%s" % [prefix, names[randi() % names.size()]]
-			item.base_def = 3 + stage_tier * 2 + randi_range(0, 2)
+			item.base_def = maxi(1, int(round((3 + stage_tier * 2 + randi_range(0, 2)) * stat_mult)))
+
+	# 隨機附加暴擊率 / 暴擊傷害詞綴（隨 1~6 品階提升機率，彩虹框 100% 雙暴詞綴）
+	var crit_rate_chance := 0.15 + (item.rarity - 1) * 0.15
+	var crit_dmg_chance := 0.15 + (item.rarity - 1) * 0.15
+	if item.rarity >= EquipmentData.Rarity.RAINBOW:
+		crit_rate_chance = 1.0
+		crit_dmg_chance = 1.0
+	elif source_type == "normal":
+		crit_rate_chance *= 0.5
+		crit_dmg_chance *= 0.5
+
+	if randf() < crit_rate_chance:
+		item.base_crit_rate = snappedf(randf_range(0.02, 0.06), 0.005) # 基礎 +2.0% ~ +6.0% 暴擊率
+	if randf() < crit_dmg_chance:
+		item.base_crit_dmg = snappedf(randf_range(0.10, 0.30), 0.05) # 基礎 +10% ~ +30% 暴擊倍率
 
 	item.level = 1
 	return item
 
+func get_current_tier() -> int:
+	return 1 + int(kill_count / 5)
+
 func forge_cost() -> int:
-	return 25 + (stage - 1) * 20
+	return 25 + (get_current_tier() - 1) * 20
 
 func forge_random_equipment() -> bool:
 	var cost := forge_cost()
 	if not spend_gold(cost):
 		return false
-	var new_item := generate_random_equipment(stage)
+	var new_item := generate_random_equipment(get_current_tier(), "forge")
 	inventory.append(new_item)
 	combat_log_added.emit("⚒️ 鍛造出【%s】(%s)！已放入背包" % [new_item.item_name, new_item.get_slot_name()])
 	equipment_changed.emit()
 	return true
 
-# 技能升級
+# 技能升級（消耗技能點，並檢查勇者等級限制）
 func upgrade_skill(index: int) -> bool:
 	if index < 0 or index >= skills.size():
 		return false
 	var s := skills[index]
-	var cost := s.get_upgrade_cost()
-	if not spend_gold(cost):
+	if level < s.required_level:
 		return false
+	var cost := s.get_upgrade_cost()
+	if skill_points < cost:
+		return false
+	skill_points -= cost
+	s.points_spent += cost
 	s.level += 1
-	combat_log_added.emit("✨ 技能【%s】升至 Lv.%d！" % [s.skill_name, s.level])
+	combat_log_added.emit("✨ 消耗 %d 點技能點，【%s】升至 Lv.%d！（剩餘技能點: %d）" % [cost, s.skill_name, s.level, skill_points])
 	skills_changed.emit()
 	stats_changed.emit()
 	return true
+
+func get_spent_skill_points() -> int:
+	var total := 0
+	for s in skills:
+		total += s.points_spent
+	return total
+
+# 重置所有已消耗的技能點
+func reset_skills() -> int:
+	var refunded := get_spent_skill_points()
+	if refunded <= 0:
+		return 0
+	for s in skills:
+		s.level -= s.points_spent
+		s.points_spent = 0
+		if s.level <= 0:
+			s.level = 0
+			s.current_cd = 0.0
+	skill_points += refunded
+	combat_log_added.emit("🔄 已重置所有技能！退還了 %d 點技能點（目前可用: %d 點）" % [refunded, skill_points])
+	skills_changed.emit()
+	stats_changed.emit()
+	return refunded

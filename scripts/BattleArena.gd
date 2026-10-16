@@ -11,6 +11,8 @@ var enemy_color := Color(0.35, 0.85, 0.45)
 var enemy_is_boss := false
 var slash_alpha: float = 0.0
 var slash_pos := Vector2.ZERO
+var is_reviving: bool = false
+var revive_ratio: float = 0.0
 
 func _process(delta: float) -> void:
 	var need_redraw := false
@@ -23,7 +25,7 @@ func _process(delta: float) -> void:
 	if slash_alpha > 0.0:
 		slash_alpha = maxf(0.0, slash_alpha - delta * 3.5)
 		need_redraw = true
-	if hero_offset != Vector2.ZERO or enemy_offset != Vector2.ZERO:
+	if hero_offset != Vector2.ZERO or enemy_offset != Vector2.ZERO or is_reviving:
 		need_redraw = true
 	if need_redraw:
 		queue_redraw()
@@ -57,19 +59,25 @@ func _draw() -> void:
 
 	# 繪製勇者 (2D 像素/幾何小人：披風、身體、頭盔、武器與盾牌)
 	var hp_center := hero_pos + hero_offset
-	var h_col := Color(0.25, 0.65, 1.0).lerp(Color.WHITE, hero_flash)
+	var hero_alpha := 0.45 if is_reviving else 1.0
+	var h_col := Color(0.25, 0.65, 1.0, hero_alpha).lerp(Color.WHITE, hero_flash)
 	# 陰影
 	draw_circle(Vector2(hp_center.x, 240), 26, Color(0, 0, 0, 0.35))
+	# 復活詠唱魔法陣與光柱特效
+	if is_reviving:
+		draw_arc(Vector2(hp_center.x, 240), 38.0, 0.0, TAU, 32, Color(0.3, 0.85, 1.0, 0.35), 2.5)
+		draw_arc(Vector2(hp_center.x, 240), 38.0, -PI * 0.5, -PI * 0.5 + TAU * revive_ratio, 32, Color(0.4, 1.0, 0.65, 0.95), 4.5)
+		draw_rect(Rect2(hp_center.x - 26, hp_center.y - 95, 52, 120), Color(0.35, 0.9, 1.0, 0.12 + 0.15 * revive_ratio))
 	# 披風
-	draw_rect(Rect2(hp_center.x - 28, hp_center.y - 38, 22, 52), Color(0.8, 0.2, 0.25))
+	draw_rect(Rect2(hp_center.x - 28, hp_center.y - 38, 22, 52), Color(0.8, 0.2, 0.25, hero_alpha))
 	# 身體鎧甲
 	draw_rect(Rect2(hp_center.x - 18, hp_center.y - 42, 36, 56), h_col)
 	# 頭部與騎士頭盔
-	draw_circle(hp_center + Vector2(0, -60), 20, Color(0.95, 0.82, 0.68).lerp(Color.WHITE, hero_flash))
-	draw_rect(Rect2(hp_center.x - 22, hp_center.y - 82, 44, 16), Color(0.75, 0.8, 0.88))
+	draw_circle(hp_center + Vector2(0, -60), 20, Color(0.95, 0.82, 0.68, hero_alpha).lerp(Color.WHITE, hero_flash))
+	draw_rect(Rect2(hp_center.x - 22, hp_center.y - 82, 44, 16), Color(0.75, 0.8, 0.88, hero_alpha))
 	# 長劍
-	draw_line(hp_center + Vector2(20, -15), hp_center + Vector2(62, -55), Color(0.9, 0.95, 1.0), 6.0)
-	draw_line(hp_center + Vector2(14, -22), hp_center + Vector2(28, -8), Color(0.95, 0.75, 0.2), 5.0)
+	draw_line(hp_center + Vector2(20, -15), hp_center + Vector2(62, -55), Color(0.9, 0.95, 1.0, hero_alpha), 6.0)
+	draw_line(hp_center + Vector2(14, -22), hp_center + Vector2(28, -8), Color(0.95, 0.75, 0.2, hero_alpha), 5.0)
 
 	# 繪製怪物 (依一般怪或 Boss 改變體型與外觀)
 	var ep_center := enemy_pos + enemy_offset
