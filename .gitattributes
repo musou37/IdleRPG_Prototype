@@ -1,0 +1,28 @@
+# Normalize line endings for all text files
+* text=auto eol=lf
+
+# Explicitly declare Godot text files
+*.gd text eol=lf
+*.tscn text eol=lf
+*.tres text eol=lf
+*.gdshader text eol=lf
+*.cfg text eol=lf
+project.godot text eol=lf
+
+# Windows batch scripts require CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary assets
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.svg text
+*.wav binary
+*.ogg binary
+*.mp3 binary
+*.ttf binary
+*.otf binary
+*.woff binary
+*.woff2 binary
