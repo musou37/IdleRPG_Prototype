@@ -13,6 +13,8 @@ extends Control
 @onready var equip_list_vbox: VBoxContainer = $BottomPanel/VBox/MainTabs/裝備與背包/Scroll/VBox/EquippedBox
 @onready var inv_list_vbox: VBoxContainer = $BottomPanel/VBox/MainTabs/裝備與背包/Scroll/VBox/InventoryBox
 @onready var forge_btn: Button = $BottomPanel/VBox/MainTabs/裝備與背包/Scroll/VBox/HeaderRow/ForgeBtn
+@onready var auto_equip_btn: Button = $BottomPanel/VBox/MainTabs/裝備與背包/Scroll/VBox/InvHeaderRow/AutoEquipBtn
+@onready var auto_sell_btn: Button = $BottomPanel/VBox/MainTabs/裝備與背包/Scroll/VBox/InvHeaderRow/AutoSellBtn
 @onready var skill_list_vbox: VBoxContainer = $BottomPanel/VBox/MainTabs/技能學習/Scroll/SkillBox
 @onready var log_panel: PanelContainer = $BottomPanel/VBox/LogPanel
 @onready var log_label: RichTextLabel = $BottomPanel/VBox/LogPanel/Margin/LogRichText
@@ -45,13 +47,30 @@ func _ready() -> void:
 	GameManager.skills_changed.connect(_refresh_skills_ui)
 	GameManager.combat_log_added.connect(_append_log)
 
-	forge_btn.visible = false
-	$BottomPanel/VBox/MainTabs.set_tab_title(0, "裝備與素材")
+	forge_btn.visible = true
+	forge_btn.pressed.connect(func():
+		if not GameManager.forge_random_equipment():
+			_spawn_floating_text(Vector2(360, 280), "金幣不足！", Color(1.0, 0.4, 0.4))
+	)
+
+	auto_equip_btn.pressed.connect(func():
+		var count := GameManager.auto_equip_best()
+		if count > 0:
+			_spawn_floating_text(Vector2(280, 260), "⚡ 已自動換上 %d 件最強裝備！" % count, Color(0.4, 1.0, 0.55))
+	)
+
+	auto_sell_btn.pressed.connect(func():
+		var res := GameManager.auto_sell_weaker()
+		var cnt: int = res.get("count", 0)
+		var g: int = res.get("gold", 0)
+		if cnt > 0:
+			_spawn_floating_text(Vector2(280, 260), "💰 售出 %d 件較弱裝備 (+%dG)" % [cnt, g], Color(1.0, 0.88, 0.3))
+	)
 
 	hero_hp = GameManager.get_total_max_hp()
 	_spawn_enemy()
 	_refresh_all_ui()
-	_append_log("⚔️ 歡迎來到 Idle RPG 雛型！擊殺怪物可獲得各部位專屬強化素材。")
+	_append_log("⚔️ 歡迎來到 Idle RPG 雛型！勇者已開始自動戰鬥。")
 
 func _setup_battle_skill_bar() -> void:
 	battle_skill_bar = HBoxContainer.new()
@@ -95,7 +114,7 @@ func _setup_debug_mode_ui() -> void:
 	margin.add_child(debug_vbox)
 
 	var toolbar := HBoxContainer.new()
-	toolbar.add_theme_constant_override("separation", 6)
+	toolbar.add_theme_constant_override("separation", 8)
 	debug_vbox.add_child(toolbar)
 
 	var title_lbl := Label.new()
@@ -104,16 +123,6 @@ func _setup_debug_mode_ui() -> void:
 	title_lbl.add_theme_font_size_override("font_size", 13)
 	title_lbl.add_theme_color_override("font_color", Color(1.0, 0.85, 0.35))
 	toolbar.add_child(title_lbl)
-
-	var btn_mat := Button.new()
-	btn_mat.text = "+15 全素材"
-	btn_mat.add_theme_font_size_override("font_size", 12)
-	btn_mat.pressed.connect(func():
-		for slot_key in [EquipmentData.SlotType.WEAPON, EquipmentData.SlotType.ARMOR, EquipmentData.SlotType.ACCESSORY]:
-			GameManager.add_material(slot_key, 15)
-		_append_log("🛠️ [除錯] 獲得三部位強化素材各 +15")
-	)
-	toolbar.add_child(btn_mat)
 
 	var btn_gold := Button.new()
 	btn_gold.text = "+500 金幣"
@@ -237,16 +246,13 @@ func _on_enemy_defeated() -> void:
 	GameManager.add_gold(gold_reward)
 	GameManager.add_exp(exp_reward)
 
-	# 掉寶判定：擊殺怪物掉落裝備專屬強化素材
-	var drop_info := GameManager.roll_monster_material_drop(is_boss, GameManager.stage)
-	if not drop_info.is_empty():
-		var mat_name: String = drop_info["name"]
-		var mat_amt: int = drop_info["amount"]
-		_spawn_floating_text(
-			arena.enemy_pos + Vector2(-35, -115),
-			"💎 +%d %s" % [mat_amt, mat_name],
-			Color(0.4, 0.95, 1.0)
-		)
+	# 掉寶判定：一般怪 22% 掉落裝備，Boss 100% 掉落裝備
+	var drop_chance := 1.0 if is_boss else 0.22
+	if randf() < drop_chance:
+		var drop := GameManager.generate_random_equipment(GameManager.stage)
+		GameManager.inventory.append(drop)
+		_append_log("🎁 擊敗 %s 掉落了裝備【%s】！" % [enemy_name, drop.item_name])
+		GameManager.equipment_changed.emit()
 
 	# 推進波數與關卡
 	GameManager.wave += 1
@@ -338,6 +344,7 @@ func _refresh_all_ui() -> void:
 	]
 	exp_bar.max_value = GameManager.get_max_exp()
 	exp_bar.value = GameManager.current_exp
+	forge_btn.text = "⚒️ 鍛造隨機裝備 (%d 金幣)" % GameManager.forge_cost()
 
 	_update_combat_bars()
 	_refresh_equipment_ui()
@@ -347,12 +354,18 @@ func _refresh_equipment_ui() -> void:
 	for c in equip_list_vbox.get_children():
 		c.queue_free()
 
-	# 1. 三格初始裝備養成槽 (橫向並排卡片)
+	# 1. 三格視覺化穿戴裝備槽 (橫向並排卡片)
 	var slots_hbox := HBoxContainer.new()
 	slots_hbox.add_theme_constant_override("separation", 10)
 	equip_list_vbox.add_child(slots_hbox)
 
-	for slot_key in [EquipmentData.SlotType.WEAPON, EquipmentData.SlotType.ARMOR, EquipmentData.SlotType.ACCESSORY]:
+	var slot_names := {
+		EquipmentData.SlotType.WEAPON: "武器槽",
+		EquipmentData.SlotType.ARMOR: "裝甲槽",
+		EquipmentData.SlotType.SHIELD: "盾牌槽"
+	}
+
+	for slot_key in [EquipmentData.SlotType.WEAPON, EquipmentData.SlotType.ARMOR, EquipmentData.SlotType.SHIELD]:
 		var card := PanelContainer.new()
 		card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
@@ -365,14 +378,14 @@ func _refresh_equipment_ui() -> void:
 
 		var vbox := VBoxContainer.new()
 		vbox.alignment = BoxContainer.ALIGNMENT_CENTER
-		vbox.add_theme_constant_override("separation", 5)
+		vbox.add_theme_constant_override("separation", 6)
 		margin.add_child(vbox)
 
 		var item: EquipmentData = GameManager.equipped.get(slot_key)
 
 		# 置中視覺圖示槽
 		var icon_center := CenterContainer.new()
-		var icon := IconSlot.new(Vector2(62, 62))
+		var icon := IconSlot.new(Vector2(60, 60))
 		icon.setup_equipment(item, slot_key)
 		icon_center.add_child(icon)
 		vbox.add_child(icon_center)
@@ -384,96 +397,126 @@ func _refresh_equipment_ui() -> void:
 		var stat_lbl := Label.new()
 		stat_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		stat_lbl.add_theme_font_size_override("font_size", 12)
-		stat_lbl.add_theme_color_override("font_color", Color(0.82, 0.86, 0.94))
-
-		var req_lbl := Label.new()
-		req_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		req_lbl.add_theme_font_size_override("font_size", 12)
+		stat_lbl.add_theme_color_override("font_color", Color(0.78, 0.82, 0.9))
 
 		var upg_btn := Button.new()
 		if item != null:
-			name_lbl.text = "%s Lv.%d" % [item.get_display_name(), item.level]
+			name_lbl.text = "%s +%d" % [item.item_name, item.level]
 			name_lbl.add_theme_color_override("font_color", item.get_rarity_color())
-			stat_lbl.text = item.get_summary_text()
-
-			var cost := item.get_upgrade_material_cost()
-			var owned := GameManager.get_material_count(slot_key)
-			var mat_name := item.get_material_name()
-			req_lbl.text = "消耗 %s: %d / %d" % [mat_name, owned, cost]
-			req_lbl.add_theme_color_override(
-				"font_color",
-				Color(0.45, 0.95, 0.55) if owned >= cost else Color(1.0, 0.5, 0.5)
-			)
-
-			upg_btn.text = "⬆️ 素材強化"
-			upg_btn.disabled = owned < cost
+			stat_lbl.text = "%s (戰力:%d)" % [item.get_summary_text(), item.get_power_score()]
+			var cost := item.get_upgrade_cost()
+			upg_btn.text = "強化 (%dG)" % cost
+			upg_btn.disabled = GameManager.gold < cost
 			upg_btn.pressed.connect(func(): GameManager.upgrade_equipped(slot_key))
+		else:
+			name_lbl.text = "%s (空)" % slot_names[slot_key]
+			name_lbl.add_theme_color_override("font_color", Color(0.5, 0.52, 0.58))
+			stat_lbl.text = "尚未穿戴"
+			upg_btn.text = "無裝備"
+			upg_btn.disabled = true
 
 		vbox.add_child(name_lbl)
 		vbox.add_child(stat_lbl)
-		vbox.add_child(req_lbl)
 		vbox.add_child(upg_btn)
 		slots_hbox.add_child(card)
 
-	# 2. 三種部位獨立對應素材倉庫 (橫向三格視覺卡片)
+	# 更新自動穿最強 / 自動售出較弱按鈕狀態
+	if auto_equip_btn != null:
+		auto_equip_btn.disabled = not GameManager.has_stronger_in_inventory()
+	if auto_sell_btn != null:
+		var weak_cnt := GameManager.get_weaker_inventory_count()
+		auto_sell_btn.disabled = (weak_cnt <= 0)
+		auto_sell_btn.text = ("💰 售出較弱裝備 (%d)" % weak_cnt) if weak_cnt > 0 else "💰 售出較弱裝備"
+
+	# 2. 備用背包視覺化欄位 (雙欄卡片網格)
 	for c in inv_list_vbox.get_children():
 		c.queue_free()
 
-	var mat_hbox := HBoxContainer.new()
-	mat_hbox.add_theme_constant_override("separation", 10)
-	inv_list_vbox.add_child(mat_hbox)
+	if GameManager.inventory.is_empty():
+		var empty_box := HBoxContainer.new()
+		empty_box.add_theme_constant_override("separation", 10)
+		for empty_idx in range(4):
+			var empty_slot := IconSlot.new(Vector2(50, 50))
+			empty_slot.setup_equipment(null, (empty_idx % 3) as EquipmentData.SlotType)
+			empty_box.add_child(empty_slot)
+		var empty_lbl := Label.new()
+		empty_lbl.text = "背包目前空空如也\n打怪掉落或點擊上方「鍛造」即可獲得裝備！"
+		empty_lbl.add_theme_color_override("font_color", Color(0.6, 0.62, 0.68))
+		empty_lbl.add_theme_font_size_override("font_size", 13)
+		empty_box.add_child(empty_lbl)
+		inv_list_vbox.add_child(empty_box)
+	else:
+		var grid := GridContainer.new()
+		grid.columns = 2
+		grid.add_theme_constant_override("h_separation", 8)
+		grid.add_theme_constant_override("v_separation", 8)
+		inv_list_vbox.add_child(grid)
 
-	var mat_descs := {
-		EquipmentData.SlotType.WEAPON: "專用於強化【武器】等級",
-		EquipmentData.SlotType.ARMOR: "專用於強化【防具】等級",
-		EquipmentData.SlotType.ACCESSORY: "專用於強化【飾品】等級"
-	}
+		for i in range(GameManager.inventory.size()):
+			var inv_item: EquipmentData = GameManager.inventory[i]
+			var item_card := PanelContainer.new()
+			item_card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
-	for slot_key in [EquipmentData.SlotType.WEAPON, EquipmentData.SlotType.ARMOR, EquipmentData.SlotType.ACCESSORY]:
-		var mat_card := PanelContainer.new()
-		mat_card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			var margin := MarginContainer.new()
+			margin.add_theme_constant_override("margin_left", 6)
+			margin.add_theme_constant_override("margin_top", 6)
+			margin.add_theme_constant_override("margin_right", 6)
+			margin.add_theme_constant_override("margin_bottom", 6)
+			item_card.add_child(margin)
 
-		var margin := MarginContainer.new()
-		margin.add_theme_constant_override("margin_left", 8)
-		margin.add_theme_constant_override("margin_top", 8)
-		margin.add_theme_constant_override("margin_right", 8)
-		margin.add_theme_constant_override("margin_bottom", 8)
-		mat_card.add_child(margin)
+			var row := HBoxContainer.new()
+			row.add_theme_constant_override("separation", 8)
+			margin.add_child(row)
 
-		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 10)
-		margin.add_child(row)
+			var icon := IconSlot.new(Vector2(52, 52))
+			icon.setup_equipment(inv_item, inv_item.slot)
+			row.add_child(icon)
 
-		var count := GameManager.get_material_count(slot_key)
-		var mat_icon := IconSlot.new(Vector2(52, 52))
-		mat_icon.setup_material(slot_key, count)
-		row.add_child(mat_icon)
+			var info_vbox := VBoxContainer.new()
+			info_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			info_vbox.add_theme_constant_override("separation", 2)
 
-		var info_vbox := VBoxContainer.new()
-		info_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		info_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
-		info_vbox.add_theme_constant_override("separation", 2)
+			var is_stronger := GameManager.is_stronger_than_equipped(inv_item)
+			var is_weaker := GameManager.is_weaker_than_equipped(inv_item)
+			var cmp_tag := "🔼較強" if is_stronger else ("🔽較弱" if is_weaker else "🟰持平")
 
-		var m_title := Label.new()
-		m_title.text = "%s" % GameManager.get_material_name(slot_key)
-		m_title.add_theme_font_size_override("font_size", 14)
-		m_title.add_theme_color_override("font_color", mat_icon.accent_color)
+			var title_lbl := Label.new()
+			title_lbl.text = "%s +%d  [%s]" % [inv_item.item_name, inv_item.level, cmp_tag]
+			title_lbl.add_theme_color_override("font_color", inv_item.get_rarity_color())
+			title_lbl.add_theme_font_size_override("font_size", 14)
 
-		var m_count := Label.new()
-		m_count.text = "持有數量: %d" % count
-		m_count.add_theme_font_size_override("font_size", 13)
-		m_count.add_theme_color_override("font_color", Color(0.95, 0.95, 0.98))
+			var stat_lbl := Label.new()
+			stat_lbl.text = "[%s] %s (戰力:%d)" % [inv_item.get_slot_name(), inv_item.get_summary_text(), inv_item.get_power_score()]
+			stat_lbl.add_theme_font_size_override("font_size", 12)
+			stat_lbl.add_theme_color_override(
+				"font_color",
+				Color(0.55, 0.95, 0.65) if is_stronger else Color(0.78, 0.82, 0.88)
+			)
 
-		var m_desc := Label.new()
-		m_desc.text = mat_descs[slot_key]
-		m_desc.add_theme_font_size_override("font_size", 11)
-		m_desc.add_theme_color_override("font_color", Color(0.68, 0.72, 0.78))
+			var btn_row := HBoxContainer.new()
+			btn_row.add_theme_constant_override("separation", 6)
+			var idx := i
 
-		info_vbox.add_child(m_title)
-		info_vbox.add_child(m_count)
-		info_vbox.add_child(m_desc)
-		row.add_child(info_vbox)
-		mat_hbox.add_child(mat_card)
+			var eq_btn := Button.new()
+			eq_btn.text = "穿戴"
+			eq_btn.add_theme_font_size_override("font_size", 12)
+			eq_btn.pressed.connect(func(): GameManager.equip_from_inventory(idx))
+
+			var sell_btn := Button.new()
+			var sell_price := int(10 * inv_item.rarity * inv_item.level)
+			sell_btn.text = "出售(+%dG)" % sell_price
+			sell_btn.add_theme_font_size_override("font_size", 12)
+			sell_btn.pressed.connect(func(): GameManager.sell_inventory_item(idx))
+
+			btn_row.add_child(eq_btn)
+			btn_row.add_child(sell_btn)
+
+			info_vbox.add_child(title_lbl)
+			info_vbox.add_child(stat_lbl)
+			info_vbox.add_child(btn_row)
+			row.add_child(info_vbox)
+			grid.add_child(item_card)
+
 
 func _refresh_skills_ui() -> void:
 	# 同步更新戰鬥畫面左上角的技能圖示列

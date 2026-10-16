@@ -154,12 +154,11 @@ layout_mode = 2
 [node name="EquipTitle" type="Label" parent="BottomPanel/VBox/MainTabs/裝備與背包/Scroll/VBox/HeaderRow"]
 layout_mode = 2
 size_flags_horizontal = 3
-text = "🛡️ 勇者裝備養成 (消耗對應素材提升等級，每 5 等進階品質)"
+text = "🛡️ 目前穿戴裝備 (可強化)"
 
 [node name="ForgeBtn" type="Button" parent="BottomPanel/VBox/MainTabs/裝備與背包/Scroll/VBox/HeaderRow"]
-visible = false
 layout_mode = 2
-text = "⚒️ 鍛造隨機裝備"
+text = "⚒️ 鍛造隨機裝備 (25 金幣)"
 
 [node name="EquippedBox" type="VBoxContainer" parent="BottomPanel/VBox/MainTabs/裝備與背包/Scroll/VBox"]
 layout_mode = 2
@@ -168,9 +167,22 @@ theme_override_constants/separation = 6
 [node name="HSeparator" type="HSeparator" parent="BottomPanel/VBox/MainTabs/裝備與背包/Scroll/VBox"]
 layout_mode = 2
 
-[node name="InvTitle" type="Label" parent="BottomPanel/VBox/MainTabs/裝備與背包/Scroll/VBox"]
+[node name="InvHeaderRow" type="HBoxContainer" parent="BottomPanel/VBox/MainTabs/裝備與背包/Scroll/VBox"]
 layout_mode = 2
-text = "💎 專屬強化素材倉庫 (擊殺怪物有機率掉落，首領必掉大量)"
+theme_override_constants/separation = 8
+
+[node name="InvTitle" type="Label" parent="BottomPanel/VBox/MainTabs/裝備與背包/Scroll/VBox/InvHeaderRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "🎒 備用背包 (打怪掉落 / 鍛造獲得)"
+
+[node name="AutoEquipBtn" type="Button" parent="BottomPanel/VBox/MainTabs/裝備與背包/Scroll/VBox/InvHeaderRow"]
+layout_mode = 2
+text = "⚡ 自動穿最強"
+
+[node name="AutoSellBtn" type="Button" parent="BottomPanel/VBox/MainTabs/裝備與背包/Scroll/VBox/InvHeaderRow"]
+layout_mode = 2
+text = "💰 售出較弱裝備"
 
 [node name="InventoryBox" type="VBoxContainer" parent="BottomPanel/VBox/MainTabs/裝備與背包/Scroll/VBox"]
 layout_mode = 2

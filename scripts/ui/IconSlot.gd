@@ -4,13 +4,10 @@ extends Control
 enum Kind {
 	EMPTY_WEAPON,
 	EMPTY_ARMOR,
-	EMPTY_ACCESSORY,
+	EMPTY_SHIELD,
 	WEAPON,
 	ARMOR,
-	ACCESSORY,
-	MAT_WEAPON,
-	MAT_ARMOR,
-	MAT_ACCESSORY,
+	SHIELD,
 	SKILL_SLASH,
 	SKILL_HEAL,
 	SKILL_ATK,
@@ -42,38 +39,20 @@ func setup_equipment(item: EquipmentData, empty_slot: EquipmentData.SlotType = E
 				icon_kind = Kind.EMPTY_WEAPON
 			EquipmentData.SlotType.ARMOR:
 				icon_kind = Kind.EMPTY_ARMOR
-			EquipmentData.SlotType.ACCESSORY:
-				icon_kind = Kind.EMPTY_ACCESSORY
+			EquipmentData.SlotType.SHIELD:
+				icon_kind = Kind.EMPTY_SHIELD
 	else:
 		is_locked = false
 		border_color = item.get_rarity_color()
 		accent_color = item.get_rarity_color()
-		badge_text = "Lv.%d" % item.level
+		badge_text = "+%d" % item.level
 		match item.slot:
 			EquipmentData.SlotType.WEAPON:
 				icon_kind = Kind.WEAPON
 			EquipmentData.SlotType.ARMOR:
 				icon_kind = Kind.ARMOR
-			EquipmentData.SlotType.ACCESSORY:
-				icon_kind = Kind.ACCESSORY
-	queue_redraw()
-
-func setup_material(slot: EquipmentData.SlotType, count: int) -> void:
-	cooldown_ratio = 0.0
-	cooldown_sec = 0.0
-	is_locked = (count <= 0)
-	badge_text = "x%d" % count
-	match slot:
-		EquipmentData.SlotType.WEAPON:
-			icon_kind = Kind.MAT_WEAPON
-			accent_color = Color(1.0, 0.52, 0.25) # 赤紅鐵礦
-		EquipmentData.SlotType.ARMOR:
-			icon_kind = Kind.MAT_ARMOR
-			accent_color = Color(0.35, 0.78, 0.95) # 蒼藍甲片
-		EquipmentData.SlotType.ACCESSORY:
-			icon_kind = Kind.MAT_ACCESSORY
-			accent_color = Color(0.85, 0.48, 1.0) # 紫耀魔晶
-	border_color = accent_color if not is_locked else Color(0.35, 0.38, 0.42)
+			EquipmentData.SlotType.SHIELD:
+				icon_kind = Kind.SHIELD
 	queue_redraw()
 
 func setup_skill(skill: SkillData) -> void:
@@ -125,7 +104,7 @@ func _draw() -> void:
 
 	match icon_kind:
 		Kind.EMPTY_WEAPON, Kind.WEAPON:
-			# 寶劍圖示：斜向劍刃、護手、劍柄
+			# 武器(劍)圖示：斜向劍刃、護手、劍柄
 			var p_tip := center + Vector2(r * 0.52, -r * 0.52)
 			var p_hilt := center + Vector2(-r * 0.22, r * 0.22)
 			var p_pommel := center + Vector2(-r * 0.52, r * 0.52)
@@ -138,7 +117,29 @@ func _draw() -> void:
 			draw_circle(p_pommel, 3.5, Color(0.95, 0.78, 0.25) if not is_locked else col)
 
 		Kind.EMPTY_ARMOR, Kind.ARMOR:
-			# 盾甲圖示：五邊形盾牌與胸甲核心
+			# 裝甲(胸甲)圖示：雙肩甲、領口、胸甲軀幹與腰甲
+			var armor_pts := PackedVector2Array([
+				center + Vector2(-r * 0.22, -r * 0.48),
+				center + Vector2(-r * 0.54, -r * 0.36),
+				center + Vector2(-r * 0.46, -r * 0.05),
+				center + Vector2(-r * 0.32, -r * 0.08),
+				center + Vector2(-r * 0.36, r * 0.48),
+				center + Vector2(r * 0.36, r * 0.48),
+				center + Vector2(r * 0.32, -r * 0.08),
+				center + Vector2(r * 0.46, -r * 0.05),
+				center + Vector2(r * 0.54, -r * 0.36),
+				center + Vector2(r * 0.22, -r * 0.48),
+				center + Vector2(0.0, -r * 0.32)
+			])
+			draw_colored_polygon(armor_pts, col.darkened(0.25))
+			for i in range(armor_pts.size()):
+				draw_line(armor_pts[i], armor_pts[(i + 1) % armor_pts.size()], light_col, 2.2)
+			# 胸甲中線與護心紋
+			draw_line(center + Vector2(0, -r * 0.30), center + Vector2(0, r * 0.46), light_col, 2.0)
+			draw_line(center + Vector2(-r * 0.32, r * 0.16), center + Vector2(r * 0.32, r * 0.16), light_col, 2.0)
+
+		Kind.EMPTY_SHIELD, Kind.SHIELD:
+			# 盾牌圖示：五邊形騎士盾與中央十字紋章
 			var pts := PackedVector2Array([
 				center + Vector2(-r * 0.48, -r * 0.45),
 				center + Vector2(r * 0.48, -r * 0.45),
@@ -151,68 +152,6 @@ func _draw() -> void:
 				draw_line(pts[i], pts[(i + 1) % pts.size()], light_col, 2.5)
 			draw_line(center + Vector2(0, -r * 0.28), center + Vector2(0, r * 0.32), light_col, 2.5)
 			draw_line(center + Vector2(-r * 0.26, -r * 0.04), center + Vector2(r * 0.26, -r * 0.04), light_col, 2.5)
-
-		Kind.EMPTY_ACCESSORY, Kind.ACCESSORY:
-			# 寶石戒/護符圖示：指環 + 上方菱形寶石
-			var ring_c := center + Vector2(0, r * 0.14)
-			draw_arc(ring_c, r * 0.34, 0.0, TAU, 24, Color(0.95, 0.8, 0.3) if not is_locked else col, 3.5)
-			var gem_c := center + Vector2(0, -r * 0.26)
-			var gem_pts := PackedVector2Array([
-				gem_c + Vector2(0, -r * 0.28),
-				gem_c + Vector2(r * 0.26, 0),
-				gem_c + Vector2(0, r * 0.28),
-				gem_c + Vector2(-r * 0.26, 0)
-			])
-			draw_colored_polygon(gem_pts, light_col)
-			for i in range(gem_pts.size()):
-				draw_line(gem_pts[i], gem_pts[(i + 1) % gem_pts.size()], col, 2.0)
-
-		Kind.MAT_WEAPON:
-			# 鋒利鐵礦：多角形礦石結晶與鍛造火星
-			var ore_pts := PackedVector2Array([
-				center + Vector2(-r * 0.15, -r * 0.52),
-				center + Vector2(r * 0.42, -r * 0.25),
-				center + Vector2(r * 0.48, r * 0.32),
-				center + Vector2(-r * 0.12, r * 0.48),
-				center + Vector2(-r * 0.48, r * 0.18),
-				center + Vector2(-r * 0.42, -r * 0.32)
-			])
-			draw_colored_polygon(ore_pts, col.darkened(0.2))
-			for i in range(ore_pts.size()):
-				draw_line(ore_pts[i], ore_pts[(i + 1) % ore_pts.size()], light_col, 2.2)
-			draw_line(center + Vector2(-r * 0.15, -r * 0.52), center + Vector2(r * 0.08, r * 0.12), light_col, 2.0)
-			draw_line(center + Vector2(r * 0.08, r * 0.12), center + Vector2(r * 0.48, r * 0.32), light_col, 2.0)
-
-		Kind.MAT_ARMOR:
-			# 堅韌甲片：雙層交疊金屬護甲鱗片
-			for layer in range(2):
-				var y_off := (layer - 0.5) * r * 0.32
-				var plate := PackedVector2Array([
-					center + Vector2(-r * 0.46, y_off - r * 0.22),
-					center + Vector2(r * 0.46, y_off - r * 0.22),
-					center + Vector2(r * 0.36, y_off + r * 0.26),
-					center + Vector2(0, y_off + r * 0.36),
-					center + Vector2(-r * 0.36, y_off + r * 0.26)
-				])
-				draw_colored_polygon(plate, col.darkened(0.15 if layer == 1 else 0.35))
-				for i in range(plate.size()):
-					draw_line(plate[i], plate[(i + 1) % plate.size()], light_col, 2.0)
-
-		Kind.MAT_ACCESSORY:
-			# 星輝魔晶：中央主六角魔晶柱 + 兩側小晶簇
-			var main_gem := PackedVector2Array([
-				center + Vector2(0, -r * 0.58),
-				center + Vector2(r * 0.26, -r * 0.22),
-				center + Vector2(r * 0.22, r * 0.42),
-				center + Vector2(0, r * 0.55),
-				center + Vector2(-r * 0.22, r * 0.42),
-				center + Vector2(-r * 0.26, -r * 0.22)
-			])
-			draw_colored_polygon(main_gem, col)
-			for i in range(main_gem.size()):
-				draw_line(main_gem[i], main_gem[(i + 1) % main_gem.size()], light_col, 2.2)
-			draw_line(center + Vector2(-r * 0.48, -r * 0.08), center + Vector2(-r * 0.2, r * 0.38), light_col, 3.5)
-			draw_line(center + Vector2(r * 0.48, -r * 0.08), center + Vector2(r * 0.2, r * 0.38), light_col, 3.5)
 
 		Kind.SKILL_SLASH:
 			# 烈焰重斬：雙重交叉烈焰斬擊弧線
@@ -251,7 +190,7 @@ func _draw() -> void:
 			var cd_str := "%.1fs" % cooldown_sec
 			draw_string(font, Vector2(6, center.y + 5), cd_str, HORIZONTAL_ALIGNMENT_CENTER, s.x - 12, 13, Color(1.0, 0.95, 0.4))
 
-	# 4. 右下角等級 / 數量小標籤
+	# 4. 右下角等級 / 狀態小標籤
 	if badge_text != "":
 		var font := ThemeDB.fallback_font
 		if font != null:
