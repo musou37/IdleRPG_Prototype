@@ -20,6 +20,15 @@ var next_is_elite: bool = false # 下一隻是否已被觸發為菁英怪
 var elite_spawn_chance: float = 0.20 # 擊殺一般怪後觸發下一隻為菁英怪的機率 (20%)
 var elite_stat_multiplier: float = 1.5 # 菁英怪強度為上一隻怪物的 N 倍 (1.5 倍)
 
+# 🎰 FEVER / BOSS RUSH 模式設定
+signal boss_rush_started(duration: float)
+signal boss_rush_ended
+var is_boss_rush: bool = false
+var boss_rush_timer: float = 0.0
+var boss_rush_duration: float = 15.0 # FEVER 持續時間 (秒)
+var boss_rush_trigger_chance: float = 0.35 # 擊敗菁英怪時觸發 BOSS RUSH 的機率 (35%)
+var boss_rush_kill_count: int = 0 # 該次 BOSS RUSH 期間擊殺的菁英怪數量
+
 # 基礎屬性
 var base_max_hp: int = 120
 var base_atk: int = 14
@@ -42,6 +51,7 @@ var skills: Array[SkillData] = []
 func _ready() -> void:
 	_init_default_skills()
 	_init_starter_equipment()
+	load_game()
 
 func _init_default_skills() -> void:
 	skills.clear()
@@ -377,6 +387,30 @@ func generate_random_equipment(stage_tier: int, source_type: String = "forge") -
 				item.rarity = EquipmentData.Rarity.PURPLE
 			else:
 				item.rarity = EquipmentData.Rarity.BLUE
+		"chest_ornate":
+			# 華麗寶箱 (3~5殺)：保底藍~紫，高機率橘裝與神話裝 (12% 彩虹、33% 橘、40% 紫、15% 藍)
+			if rarity_roll < 0.12:
+				item.rarity = EquipmentData.Rarity.RAINBOW
+			elif rarity_roll < 0.45:
+				item.rarity = EquipmentData.Rarity.ORANGE
+			elif rarity_roll < 0.85:
+				item.rarity = EquipmentData.Rarity.PURPLE
+			else:
+				item.rarity = EquipmentData.Rarity.BLUE
+		"chest_luxury":
+			# 奢華寶箱 (6~9殺)：保底紫裝，極高機率橘裝與神話裝 (28% 彩虹、47% 橘、25% 紫)
+			if rarity_roll < 0.28:
+				item.rarity = EquipmentData.Rarity.RAINBOW
+			elif rarity_roll < 0.75:
+				item.rarity = EquipmentData.Rarity.ORANGE
+			else:
+				item.rarity = EquipmentData.Rarity.PURPLE
+		"chest_ultimate":
+			# 究極寶箱 (10殺以上)：全數為傳奇橘裝與天界彩虹神話裝！(55% 彩虹、45% 橘)
+			if rarity_roll < 0.55:
+				item.rarity = EquipmentData.Rarity.RAINBOW
+			else:
+				item.rarity = EquipmentData.Rarity.ORANGE
 		_:
 			# 鐵匠鍛造：全品階皆可鍛造（40% 白、30% 綠、16% 藍、9% 紫、4% 橘、1% 彩虹框）
 			if rarity_roll < 0.01:
@@ -402,8 +436,17 @@ func generate_random_equipment(stage_tier: int, source_type: String = "forge") -
 	}
 	var prefix: String = prefix_map.get(item.rarity, "粗鐵")
 
-	# 菁英怪掉落的裝備有額外 +25% 基礎屬性加成，一般怪掉落則為 80% 基礎屬性
-	var stat_mult := 1.25 if source_type == "elite" else (0.80 if source_type == "normal" else 1.0)
+	# 菁英怪與 RUSH 寶箱掉落的裝備皆享有額外基礎屬性加成
+	var stat_mult := 1.0
+	match source_type:
+		"normal":
+			stat_mult = 0.80
+		"elite", "chest_ornate":
+			stat_mult = 1.25
+		"chest_luxury":
+			stat_mult = 1.38
+		"chest_ultimate":
+			stat_mult = 1.50
 
 	match slot_roll:
 		0:
@@ -442,6 +485,50 @@ func generate_random_equipment(stage_tier: int, source_type: String = "forge") -
 
 	item.level = 1
 	return item
+
+# 依 BOSS RUSH 擊殺數結算對應品階的 RUSH 寶箱與掉落裝備清單
+# 規則：
+# - 3~5 殺：華麗寶箱 (最低 2 件)
+# - 6~9 殺：奢華寶箱 (3 件，更高品質)
+# - 10 殺以上：究極寶箱 (10~19殺 4 件，之後每滿 10 殺再多 1 件，極高品質)
+func generate_rush_chest_reward(kills: int) -> Dictionary:
+	if kills < 3:
+		return {"has_chest": false, "chest_tier": 0, "chest_name": "", "items": []}
+
+	var chest_tier := 1
+	var chest_name := "華麗寶箱"
+	var item_count := 2
+	var source_type := "chest_ornate"
+
+	if kills >= 10:
+		chest_tier = 3
+		chest_name = "究極寶箱"
+		# 10~19殺為 4 件，20~29殺為 5 件，30~39殺為 6 件... 每 10 殺多 1 件
+		item_count = 3 + int(kills / 10)
+		source_type = "chest_ultimate"
+	elif kills >= 6:
+		chest_tier = 2
+		chest_name = "奢華寶箱"
+		item_count = 3
+		source_type = "chest_luxury"
+	else:
+		chest_tier = 1
+		chest_name = "華麗寶箱"
+		item_count = 2
+		source_type = "chest_ornate"
+
+	var tier := get_current_tier()
+	var drops: Array[EquipmentData] = []
+	for i in range(item_count):
+		drops.append(generate_random_equipment(tier, source_type))
+
+	return {
+		"has_chest": true,
+		"chest_tier": chest_tier,
+		"chest_name": chest_name,
+		"kills": kills,
+		"items": drops
+	}
 
 func get_current_tier() -> int:
 	return 1 + int(kill_count / 5)
@@ -499,3 +586,140 @@ func reset_skills() -> int:
 	skills_changed.emit()
 	stats_changed.emit()
 	return refunded
+
+# 🎰 FEVER / BOSS RUSH 啟動與結束控制
+func start_boss_rush(duration: float = -1.0) -> void:
+	is_boss_rush = true
+	boss_rush_timer = boss_rush_duration if duration <= 0.0 else duration
+	boss_rush_kill_count = 0
+	next_is_elite = true
+	boss_rush_started.emit(boss_rush_timer)
+	combat_log_added.emit("🎰🔥【FEVER！BOSS RUSH 狂熱模式爆發！】🔥🎰")
+	combat_log_added.emit("⚡ 接下來 %.0f 秒內將源源不絕湧現【菁英怪】，高階神裝大爆發！" % boss_rush_timer)
+
+func end_boss_rush() -> void:
+	if not is_boss_rush:
+		return
+	is_boss_rush = false
+	boss_rush_timer = 0.0
+	boss_rush_ended.emit()
+	combat_log_added.emit("🏁【BOSS RUSH FEVER 結束】本次狂熱共討伐了 %d 隻菁英怪！戰場回歸平靜。" % boss_rush_kill_count)
+
+# 💾 進度存檔與讀檔系統 (Save & Load System)
+func save_game() -> bool:
+	var save_dict := {
+		"version": 1,
+		"level": level,
+		"current_exp": current_exp,
+		"gold": gold,
+		"skill_points": skill_points,
+		"kill_count": kill_count,
+		"equipped": {},
+		"inventory": [],
+		"skills": []
+	}
+
+	# 1. 穿戴裝備
+	for slot_key in equipped.keys():
+		var item: EquipmentData = equipped[slot_key]
+		if item != null:
+			save_dict["equipped"][str(slot_key)] = item.to_dict()
+		else:
+			save_dict["equipped"][str(slot_key)] = null
+
+	# 2. 背包裝備
+	for item: EquipmentData in inventory:
+		if item != null:
+			save_dict["inventory"].append(item.to_dict())
+
+	# 3. 技能進度
+	for s: SkillData in skills:
+		save_dict["skills"].append(s.to_dict())
+
+	var json_str := JSON.stringify(save_dict, "\t")
+	var file := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+	if file == null:
+		print("[Save] 無法寫入存檔檔案: ", SAVE_PATH)
+		return false
+	file.store_string(json_str)
+	file.close()
+	return true
+
+func load_game() -> bool:
+	if not FileAccess.file_exists(SAVE_PATH):
+		return false
+
+	var file := FileAccess.open(SAVE_PATH, FileAccess.READ)
+	if file == null:
+		return false
+
+	var json_str := file.get_as_text()
+	file.close()
+
+	var parse_result = JSON.parse_string(json_str)
+	if typeof(parse_result) != TYPE_DICTIONARY:
+		return false
+
+	var d: Dictionary = parse_result
+
+	level = int(d.get("level", 1))
+	current_exp = int(d.get("current_exp", 0))
+	gold = int(d.get("gold", 50))
+	skill_points = int(d.get("skill_points", 0))
+	kill_count = int(d.get("kill_count", 0))
+
+	# 讀取穿戴裝備
+	if d.has("equipped") and typeof(d["equipped"]) == TYPE_DICTIONARY:
+		var eq_dict: Dictionary = d["equipped"]
+		for slot_key_str in eq_dict.keys():
+			var slot_key := int(slot_key_str) as EquipmentData.SlotType
+			var item_data = eq_dict[slot_key_str]
+			if typeof(item_data) == TYPE_DICTIONARY:
+				equipped[slot_key] = EquipmentData.from_dict(item_data)
+			else:
+				equipped[slot_key] = null
+
+	# 讀取背包裝備
+	if d.has("inventory") and typeof(d["inventory"]) == TYPE_ARRAY:
+		inventory.clear()
+		for item_dict in d["inventory"]:
+			if typeof(item_dict) == TYPE_DICTIONARY:
+				inventory.append(EquipmentData.from_dict(item_dict))
+
+	# 讀取技能學習狀態
+	if d.has("skills") and typeof(d["skills"]) == TYPE_ARRAY:
+		var skill_map: Dictionary = {}
+		for sk_data in d["skills"]:
+			if typeof(sk_data) == TYPE_DICTIONARY and sk_data.has("id"):
+				skill_map[sk_data["id"]] = sk_data
+		for s in skills:
+			if skill_map.has(s.id):
+				s.apply_dict(skill_map[s.id])
+
+	stats_changed.emit()
+	gold_changed.emit(gold)
+	exp_changed.emit(current_exp, get_max_exp(), level)
+	equipment_changed.emit()
+	skills_changed.emit()
+	print("[Load] 成功讀取遊戲進度！Lv.", level, " 金幣: ", gold, " 累計擊殺: ", kill_count)
+	return true
+
+func reset_save_data() -> void:
+	if FileAccess.file_exists(SAVE_PATH):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(SAVE_PATH))
+	level = 1
+	current_exp = 0
+	gold = 50
+	skill_points = 0
+	kill_count = 0
+	next_is_elite = false
+	is_boss_rush = false
+	boss_rush_timer = 0.0
+	_init_default_skills()
+	_init_starter_equipment()
+	stats_changed.emit()
+	gold_changed.emit(gold)
+	exp_changed.emit(current_exp, get_max_exp(), level)
+	equipment_changed.emit()
+	skills_changed.emit()
+

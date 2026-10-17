@@ -41,17 +41,35 @@ var battle_skill_icons: Array[IconSlot] = []
 var tab_skill_icons: Array[IconSlot] = []
 var battle_skill_bar: HBoxContainer = null
 var debug_mode_btn: Button = null
+var equipped_upg_btns: Dictionary = {} # 紀錄各裝備槽的強化按鈕，供金幣變化時更新 disabled 狀態而不重建節點
+
+const BossRushCutInScript := preload("res://scripts/ui/BossRushCutIn.gd")
+const RushChestCutInScript := preload("res://scripts/ui/RushChestCutIn.gd")
+
+# 🎰 BOSS RUSH 炫耀擊殺計數器 UI (簡約兩行：N KILL + 熱血評語) 與全畫面最上層大絕招 / 寶箱 Cut-In
+var rush_counter_panel: PanelContainer = null
+var rush_counter_num_lbl: Label = null
+var rush_counter_sub_lbl: Label = null
+var rush_counter_tween: Tween = null
+var rush_counter_style: StyleBoxFlat = null
+var boss_rush_cut_in: Control = null
+var rush_chest_cut_in: Control = null
+var debug_chest_test_idx: int = 0
 
 func _ready() -> void:
+	_setup_tooltip_theme()
 	_setup_battle_skill_bar()
+	_setup_boss_rush_counter_ui()
 	_setup_debug_mode_ui()
 
 	GameManager.stats_changed.connect(_on_stats_changed)
-	GameManager.gold_changed.connect(func(_g): _refresh_all_ui())
-	GameManager.exp_changed.connect(func(_e, _m, _l): _refresh_all_ui())
+	GameManager.gold_changed.connect(func(_g): _update_header_and_buttons())
+	GameManager.exp_changed.connect(func(_e, _m, _l): _update_header_and_buttons())
 	GameManager.equipment_changed.connect(_refresh_equipment_ui)
 	GameManager.skills_changed.connect(_refresh_skills_ui)
 	GameManager.combat_log_added.connect(_append_log)
+	GameManager.boss_rush_started.connect(_on_boss_rush_started)
+	GameManager.boss_rush_ended.connect(_on_boss_rush_ended)
 
 	forge_btn.visible = true
 	forge_btn.pressed.connect(func():
@@ -76,7 +94,40 @@ func _ready() -> void:
 	hero_hp = GameManager.get_total_max_hp()
 	_spawn_enemy()
 	_refresh_all_ui()
-	_append_log("⚔️ 歡迎來到 Idle RPG 雛型！勇者已開始自動戰鬥。")
+	_append_log("⚔️ 歡迎來到 Idle RPG！進度自動儲存已啟用。")
+
+	# 建立每 5 秒定期自動存檔 Timer
+	var auto_save_timer := Timer.new()
+	auto_save_timer.wait_time = 5.0
+	auto_save_timer.autostart = true
+	auto_save_timer.timeout.connect(func():
+		GameManager.save_game()
+	)
+	add_child(auto_save_timer)
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_PREDELETE:
+		GameManager.save_game()
+
+func _setup_tooltip_theme() -> void:
+	# 加深全局 Tooltip 背板顏色為高不透明度的深色面板，避免背後物件干擾閱讀
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.06, 0.07, 0.11, 0.98) # 98% 不透明深藍黑底色
+	style.border_color = Color(0.55, 0.62, 0.78, 1.0)
+	style.set_border_width_all(2)
+	style.set_corner_radius_all(6)
+	style.content_margin_left = 12
+	style.content_margin_top = 10
+	style.content_margin_right = 12
+	style.content_margin_bottom = 10
+	style.shadow_color = Color(0.0, 0.0, 0.0, 0.65)
+	style.shadow_size = 6
+
+	var default_theme := ThemeDB.get_default_theme()
+	if default_theme != null:
+		default_theme.set_stylebox("panel", "TooltipPanel", style)
+		default_theme.set_color("font_color", "TooltipLabel", Color(0.96, 0.97, 1.0))
+		default_theme.set_color("font_shadow_color", "TooltipLabel", Color(0.0, 0.0, 0.0, 0.8))
 
 func _setup_battle_skill_bar() -> void:
 	battle_skill_bar = HBoxContainer.new()
@@ -90,6 +141,155 @@ func _setup_battle_skill_bar() -> void:
 		icon.tooltip_text = GameManager.skills[i].skill_name
 		battle_skill_bar.add_child(icon)
 		battle_skill_icons.append(icon)
+
+func _setup_boss_rush_counter_ui() -> void:
+	rush_counter_panel = PanelContainer.new()
+	rush_counter_panel.visible = false
+	rush_counter_panel.custom_minimum_size = Vector2(220, 74)
+	rush_counter_panel.position = Vector2(250, 56) # 置中於舞台上方 (720 / 2 - 110 = 250)
+	rush_counter_panel.pivot_offset = Vector2(110, 37)
+	rush_counter_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	rush_counter_style = StyleBoxFlat.new()
+	rush_counter_style.bg_color = Color(0.18, 0.05, 0.08, 0.95)
+	rush_counter_style.border_color = Color(1.0, 0.82, 0.18, 1.0)
+	rush_counter_style.set_border_width_all(3)
+	rush_counter_style.set_corner_radius_all(12)
+	rush_counter_style.content_margin_left = 14
+	rush_counter_style.content_margin_top = 6
+	rush_counter_style.content_margin_right = 14
+	rush_counter_style.content_margin_bottom = 6
+	rush_counter_style.shadow_color = Color(1.0, 0.45, 0.05, 0.55)
+	rush_counter_style.shadow_size = 10
+	rush_counter_panel.add_theme_stylebox_override("panel", rush_counter_style)
+
+	var vbox := VBoxContainer.new()
+	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	vbox.add_theme_constant_override("separation", 2)
+	vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	rush_counter_panel.add_child(vbox)
+
+	rush_counter_num_lbl = Label.new()
+	rush_counter_num_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	rush_counter_num_lbl.text = "0 KILL"
+	rush_counter_num_lbl.add_theme_font_size_override("font_size", 34)
+	rush_counter_num_lbl.add_theme_color_override("font_color", Color(1.0, 0.95, 0.2))
+	rush_counter_num_lbl.add_theme_color_override("font_outline_color", Color(0.25, 0.02, 0.0))
+	rush_counter_num_lbl.add_theme_constant_override("outline_size", 6)
+	vbox.add_child(rush_counter_num_lbl)
+
+	rush_counter_sub_lbl = Label.new()
+	rush_counter_sub_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	rush_counter_sub_lbl.text = "🔥 狂熱開戰！"
+	rush_counter_sub_lbl.add_theme_font_size_override("font_size", 13)
+	rush_counter_sub_lbl.add_theme_color_override("font_color", Color(1.0, 0.78, 0.35))
+	rush_counter_sub_lbl.add_theme_color_override("font_outline_color", Color.BLACK)
+	rush_counter_sub_lbl.add_theme_constant_override("outline_size", 3)
+	vbox.add_child(rush_counter_sub_lbl)
+
+	$BattleViewport.add_child(rush_counter_panel)
+
+	# 建立最上層全畫面大絕招 Cut-In 圖層 (CanvasLayer layer = 100，跨在全螢幕正中央且暫停遊戲演出)
+	var cut_in_layer := CanvasLayer.new()
+	cut_in_layer.layer = 100
+	cut_in_layer.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(cut_in_layer)
+
+	boss_rush_cut_in = BossRushCutInScript.new()
+	cut_in_layer.add_child(boss_rush_cut_in)
+
+	rush_chest_cut_in = RushChestCutInScript.new()
+	cut_in_layer.add_child(rush_chest_cut_in)
+
+func _on_boss_rush_started(_duration: float) -> void:
+	if arena != null:
+		arena.is_boss_rush = true
+		arena.queue_redraw()
+
+	if boss_rush_cut_in != null:
+		boss_rush_cut_in.play_cut_in()
+
+	if rush_counter_tween != null and rush_counter_tween.is_valid():
+		rush_counter_tween.kill()
+
+	rush_counter_panel.visible = true
+	rush_counter_panel.modulate = Color(1, 1, 1, 1)
+	rush_counter_panel.scale = Vector2(0.4, 0.4)
+	rush_counter_style.bg_color = Color(0.20, 0.05, 0.08, 0.95)
+	rush_counter_style.border_color = Color(1.0, 0.82, 0.18, 1.0)
+	rush_counter_num_lbl.text = "0 KILL"
+	rush_counter_num_lbl.add_theme_color_override("font_color", Color(1.0, 0.95, 0.2))
+	rush_counter_sub_lbl.text = "🔥 狂熱開戰！"
+
+	rush_counter_tween = create_tween()
+	rush_counter_tween.tween_property(rush_counter_panel, "scale", Vector2(1.12, 1.12), 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	rush_counter_tween.tween_property(rush_counter_panel, "scale", Vector2(1.0, 1.0), 0.12)
+
+func _bump_boss_rush_counter() -> void:
+	if rush_counter_panel == null:
+		return
+	var cnt := GameManager.boss_rush_kill_count
+	rush_counter_num_lbl.text = "%d KILL" % cnt
+
+	# 依擊殺數給予熱血評語
+	if cnt >= 10:
+		rush_counter_sub_lbl.text = "👑 神乎其技！無雙暴走連斬！"
+		rush_counter_num_lbl.add_theme_color_override("font_color", Color(1.0, 0.45, 0.85))
+	elif cnt >= 6:
+		rush_counter_sub_lbl.text = "💎 大豐收！寶物狂噴停不下來！"
+		rush_counter_num_lbl.add_theme_color_override("font_color", Color(1.0, 0.65, 0.15))
+	elif cnt >= 3:
+		rush_counter_sub_lbl.text = "🔥 連斬氣勢如虹！繼續衝刺！"
+		rush_counter_num_lbl.add_theme_color_override("font_color", Color(1.0, 0.92, 0.2))
+	else:
+		rush_counter_sub_lbl.text = "⚡ 首殺突破！乘勝追擊！"
+		rush_counter_num_lbl.add_theme_color_override("font_color", Color(1.0, 0.95, 0.2))
+
+	if rush_counter_tween != null and rush_counter_tween.is_valid():
+		rush_counter_tween.kill()
+	rush_counter_panel.modulate = Color(1, 1, 1, 1)
+	rush_counter_panel.scale = Vector2(1.30, 1.30)
+	rush_counter_tween = create_tween()
+	rush_counter_tween.tween_property(rush_counter_panel, "scale", Vector2(1.0, 1.0), 0.22).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
+
+func _on_boss_rush_ended() -> void:
+	if boss_rush_cut_in != null:
+		boss_rush_cut_in.force_stop()
+
+	var cnt := GameManager.boss_rush_kill_count
+	# 依 RUSH 期間擊殺數發放額外 RUSH 寶箱 (3~5殺: 華麗寶箱, 6~9殺: 奢華寶箱, 10殺以上: 究極寶箱)
+	var reward := GameManager.generate_rush_chest_reward(cnt)
+	if reward.get("has_chest", false) and rush_chest_cut_in != null:
+		rush_chest_cut_in.play_chest_cut_in(reward)
+		var items_arr: Array = reward.get("items", [])
+		_append_log("🎁 [RUSH 寶箱] 達成 %d KILL！獲得【%s】，開出 %d 件高階神裝！" % [cnt, reward.get("chest_name", ""), items_arr.size()])
+
+	if rush_counter_panel == null or not rush_counter_panel.visible:
+		return
+	if rush_counter_tween != null and rush_counter_tween.is_valid():
+		rush_counter_tween.kill()
+
+	# 切換為黃金邊框榮耀結算，依然只保留 N KILL 與熱血結算評語，停留展示 4.5 秒再緩緩淡出
+	rush_counter_style.bg_color = Color(0.14, 0.10, 0.03, 0.96)
+	rush_counter_style.border_color = Color(1.0, 0.92, 0.35, 1.0)
+	rush_counter_num_lbl.text = "%d KILL" % cnt
+	rush_counter_num_lbl.add_theme_color_override("font_color", Color(1.0, 0.95, 0.35))
+
+	var rank_str := "👑 傳說連斬！獲【究極寶箱】！" if cnt >= 10 else ("💎 戰果豐碩！獲【奢華寶箱】！" if cnt >= 6 else ("🎁 狂熱突破！獲【華麗寶箱】！" if cnt >= 3 else "⚔️ 狂熱結束！再接再厲！"))
+	rush_counter_sub_lbl.text = rank_str
+
+	rush_counter_panel.modulate = Color(1, 1, 1, 1)
+	rush_counter_panel.scale = Vector2(1.22, 1.22)
+
+	rush_counter_tween = create_tween()
+	# 先彈跳放大慶祝，接著在畫面上高調留存 4.5 秒供玩家欣賞炫耀，最後 0.85 秒優雅淡出
+	rush_counter_tween.tween_property(rush_counter_panel, "scale", Vector2(1.05, 1.05), 0.35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	rush_counter_tween.tween_interval(4.5)
+	rush_counter_tween.tween_property(rush_counter_panel, "modulate:a", 0.0, 0.85).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	rush_counter_tween.tween_callback(func():
+		rush_counter_panel.visible = false
+	)
+
 
 func _setup_debug_mode_ui() -> void:
 	# 預設隱藏文字紀錄面板
@@ -169,6 +369,68 @@ func _setup_debug_mode_ui() -> void:
 	)
 	toolbar.add_child(btn_elite)
 
+	var btn_rush := Button.new()
+	btn_rush.text = "🎰 觸發RUSH"
+	btn_rush.add_theme_font_size_override("font_size", 12)
+	btn_rush.pressed.connect(func():
+		GameManager.start_boss_rush(15.0)
+		_spawn_floating_text(arena.enemy_pos + Vector2(-60, -120), "🔥 BOSS RUSH FEVER! 🔥", Color(1.0, 0.85, 0.2))
+		if not enemy_is_elite:
+			_spawn_enemy()
+		_refresh_all_ui()
+	)
+	toolbar.add_child(btn_rush)
+
+	var btn_chest := Button.new()
+	btn_chest.text = "🎁 測寶箱"
+	btn_chest.add_theme_font_size_override("font_size", 12)
+	btn_chest.pressed.connect(func():
+		var test_kills_list := [4, 7, 12, 22] # 依序測試：4殺(華麗2件)、7殺(奢華3件)、12殺(究極4件)、22殺(究極5件)
+		var tk: int = test_kills_list[debug_chest_test_idx % test_kills_list.size()]
+		debug_chest_test_idx += 1
+		var reward := GameManager.generate_rush_chest_reward(tk)
+		if rush_chest_cut_in != null:
+			rush_chest_cut_in.play_chest_cut_in(reward)
+		_append_log("🛠️ [除錯] 測試模擬 %d KILL 結算 -> 獲得【%s】（噴出 %d 件裝備）！" % [tk, reward.get("chest_name", ""), reward.get("items", []).size()])
+	)
+	toolbar.add_child(btn_chest)
+
+	var btn_save := Button.new()
+	btn_save.text = "💾 存檔"
+	btn_save.add_theme_font_size_override("font_size", 12)
+	btn_save.pressed.connect(func():
+		if GameManager.save_game():
+			_spawn_floating_text(Vector2(320, 260), "💾 進度已儲存！", Color(0.4, 1.0, 0.6))
+			_append_log("💾 [存檔] 遊戲進度已手動儲存至本機。")
+	)
+	toolbar.add_child(btn_save)
+
+	var btn_reset_save := Button.new()
+	btn_reset_save.text = "🗑️ 重置進度"
+	btn_reset_save.add_theme_font_size_override("font_size", 12)
+	btn_reset_save.pressed.connect(func():
+		GameManager.reset_save_data()
+		hero_hp = GameManager.get_total_max_hp()
+		_spawn_enemy()
+		_refresh_all_ui()
+		_spawn_floating_text(Vector2(300, 260), "🗑️ 進度已重置為新局！", Color(1.0, 0.4, 0.4))
+		_append_log("🗑️ [存檔] 存檔已清除，進度已重置為全新開局。")
+	)
+	toolbar.add_child(btn_reset_save)
+
+	var btn_art := Button.new()
+	btn_art.text = "🎨 美術: 正式圖素"
+	btn_art.add_theme_font_size_override("font_size", 12)
+	btn_art.pressed.connect(func():
+		AssetLoader.use_custom_assets = not AssetLoader.use_custom_assets
+		AssetLoader.clear_cache()
+		btn_art.text = "🎨 美術: 正式圖素" if AssetLoader.use_custom_assets else "🎨 美術: 原生備案"
+		arena.queue_redraw()
+		_refresh_all_ui()
+		_append_log("🎨 [美術] 已切換為【%s】模式（支援隨時覆蓋 assets/ 內的 PNG 圖檔）！" % ("正式美術素材" if AssetLoader.use_custom_assets else "原生程式幾何備案"))
+	)
+	toolbar.add_child(btn_art)
+
 	var btn_clear := Button.new()
 	btn_clear.text = "清空紀錄"
 	btn_clear.add_theme_font_size_override("font_size", 12)
@@ -179,8 +441,28 @@ func _setup_debug_mode_ui() -> void:
 	debug_vbox.add_child(log_label)
 
 func _process(delta: float) -> void:
+	_process_boss_rush(delta)
 	_process_combat(delta)
 	_process_active_skills(delta)
+
+func _process_boss_rush(delta: float) -> void:
+	if GameManager.is_boss_rush:
+		Engine.time_scale = 2.0 # 🔥 進入 BOSS RUSH FEVER，整體演出與戰鬥速度提升為 2 倍！
+		GameManager.boss_rush_timer -= delta
+		arena.is_boss_rush = true
+		if GameManager.boss_rush_timer <= 0.0:
+			GameManager.end_boss_rush()
+			arena.is_boss_rush = false
+			Engine.time_scale = 1.0 # 結束後恢復正常 1.0 倍速
+			_spawn_floating_text(arena.hero_pos + Vector2(0, -85), "🏁 BOSS RUSH 結束", Color(1.0, 0.8, 0.4))
+			_update_header_and_buttons()
+		else:
+			# 每秒約更新幾次頂部倒數計時文字
+			_update_stage_label_text()
+	else:
+		arena.is_boss_rush = false
+		if Engine.time_scale != 1.0:
+			Engine.time_scale = 1.0
 
 func _process_combat(delta: float) -> void:
 	# 若勇者正在復活詠唱中：暫停雙方普攻，敵人停止攻擊並維持原血量
@@ -286,9 +568,10 @@ func _perform_enemy_attack() -> void:
 		_on_hero_defeated()
 
 func _on_enemy_defeated() -> void:
-	# 紀錄上一隻怪物的屬性（供下一隻菁英怪以 N 倍放大）
-	prev_enemy_max_hp = enemy_max_hp
-	prev_enemy_atk = enemy_atk
+	# 紀錄上一隻怪物的屬性（只有一般怪死亡時才更新基準，避免菁英怪或 BOSS RUSH 連續乘上倍率暴增）
+	if not enemy_is_elite:
+		prev_enemy_max_hp = enemy_max_hp
+		prev_enemy_atk = enemy_atk
 
 	GameManager.kill_count += 1
 	var tier := GameManager.get_current_tier()
@@ -312,15 +595,27 @@ func _on_enemy_defeated() -> void:
 			_append_log("🎁 擊敗 %s 爆出了裝備【%s】！" % [enemy_name, drop.item_name])
 		_spawn_item_drop_animation(drop, arena.enemy_pos)
 
+	# 🎰 FEVER / BOSS RUSH 判定與統計
+	if enemy_is_elite:
+		if GameManager.is_boss_rush:
+			GameManager.boss_rush_kill_count += 1
+			_bump_boss_rush_counter()
+			_spawn_floating_text(arena.enemy_pos + Vector2(-30, -90), "🔥 FEVER +1! (計 %d 隻)" % GameManager.boss_rush_kill_count, Color(1.0, 0.85, 0.2))
+		else:
+			# 擊敗非狂熱狀態下的菁英怪，有一定機率觸發 BOSS RUSH 模式 (如 35%)
+			if randf() < GameManager.boss_rush_trigger_chance:
+				GameManager.start_boss_rush()
+				_spawn_floating_text(arena.enemy_pos + Vector2(-60, -120), "🔥 BOSS RUSH FEVER! 🔥", Color(1.0, 0.9, 0.15))
+
 	# 每次擊殺一般怪物時，有一定機率觸發下一隻為「菁英怪」
-	if not enemy_is_elite and not GameManager.next_is_elite:
+	if not enemy_is_elite and not GameManager.next_is_elite and not GameManager.is_boss_rush:
 		if randf() < GameManager.elite_spawn_chance:
 			GameManager.next_is_elite = true
 			_spawn_floating_text(arena.enemy_pos + Vector2(-40, -115), "⚠️ 觸發菁英怪來襲！", Color(1.0, 0.35, 0.35))
 			_append_log("⚠️ 殺氣凝聚！下一隻登場的將是強度 %.1f 倍的【菁英怪】！" % GameManager.elite_stat_multiplier)
 
 	_spawn_enemy()
-	_refresh_all_ui()
+	_update_header_and_buttons()
 
 func _spawn_item_drop_animation(item: EquipmentData, origin_pos: Vector2) -> void:
 	var fx := DroppedItemFX.new(item)
@@ -385,7 +680,7 @@ func _spawn_enemy() -> void:
 	var monster_names := ["翠綠史萊姆", "狂暴哥布林", "暗影骷髏兵", "雙頭魔狼", "深淵石像鬼"]
 	var base_name: String = monster_names[k % monster_names.size()]
 
-	enemy_is_elite = GameManager.next_is_elite
+	enemy_is_elite = GameManager.next_is_elite or GameManager.is_boss_rush
 	GameManager.next_is_elite = false
 
 	enemy_is_boss_setup(enemy_is_elite, k + 1)
@@ -409,6 +704,8 @@ func _spawn_enemy() -> void:
 		prev_enemy_max_hp = enemy_max_hp
 		prev_enemy_atk = enemy_atk
 
+	arena.enemy_title = enemy_name
+	arena.queue_redraw()
 	enemy_atk_timer = 0.0
 	_update_combat_bars()
 
@@ -442,7 +739,7 @@ func _spawn_floating_text(pos: Vector2, text: String, col: Color) -> void:
 
 func _on_stats_changed() -> void:
 	hero_hp = mini(hero_hp, GameManager.get_total_max_hp())
-	_refresh_all_ui()
+	_update_header_and_buttons()
 
 func _update_combat_bars() -> void:
 	var max_hp := GameManager.get_total_max_hp()
@@ -460,11 +757,22 @@ func _update_combat_bars() -> void:
 	enemy_hp_bar.value = enemy_hp
 	$BattleViewport/EnemyHUD/HPLabel.text = "HP: %d / %d" % [enemy_hp, enemy_max_hp]
 
-func _refresh_all_ui() -> void:
-	var elite_tag := ("   |   🔥 當前: 菁英怪 (%.1fx)" % GameManager.elite_stat_multiplier) if enemy_is_elite else (
-		"   |   ⚠️ 下一隻: 菁英怪！" if GameManager.next_is_elite else ""
-	)
-	stage_label.text = "💀 累計討伐: %d 隻%s" % [GameManager.kill_count, elite_tag]
+func _update_stage_label_text() -> void:
+	if GameManager.is_boss_rush:
+		stage_label.text = "🎰🔥【FEVER！BOSS RUSH ⚡2x極速】剩餘: %.1fs (討伐: %d隻) 🔥🎰" % [
+			maxf(0.0, GameManager.boss_rush_timer),
+			GameManager.boss_rush_kill_count
+		]
+		stage_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.2))
+	else:
+		stage_label.remove_theme_color_override("font_color")
+		var elite_tag := ("   |   🔥 當前: 菁英怪 (%.1fx)" % GameManager.elite_stat_multiplier) if enemy_is_elite else (
+			"   |   ⚠️ 下一隻: 菁英怪！" if GameManager.next_is_elite else ""
+		)
+		stage_label.text = "💀 累計討伐: %d 隻%s" % [GameManager.kill_count, elite_tag]
+
+func _update_header_and_buttons() -> void:
+	_update_stage_label_text()
 	stats_label.text = "Lv.%d 勇者  |  💰 金幣: %d  |  📘 技能點: %d  |  💥 暴率: %.1f%%  |  🔥 暴傷: %.2fx\n❤️ 生命: %d   ⚔️ 攻擊: %d   🛡️ 防禦: %d   ⚡ 攻速: %.2f/秒" % [
 		GameManager.level,
 		GameManager.gold,
@@ -479,80 +787,79 @@ func _refresh_all_ui() -> void:
 	exp_bar.max_value = GameManager.get_max_exp()
 	exp_bar.value = GameManager.current_exp
 	forge_btn.text = "⚒️ 鍛造隨機裝備 (%d 金幣)" % GameManager.forge_cost()
-
 	_update_combat_bars()
+
+	# 僅更新已存在的強化按鈕啟用狀態，不銷毀裝備圖示節點（避免戰鬥擊殺時 Tooltip 消失！）
+	for slot_key in equipped_upg_btns.keys():
+		var entry: Dictionary = equipped_upg_btns[slot_key]
+		var btn: Button = entry.get("btn")
+		if is_instance_valid(btn):
+			var item: EquipmentData = GameManager.equipped.get(slot_key)
+			if item != null:
+				var cost := item.get_upgrade_cost()
+				btn.text = "強化 (%dG)" % cost
+				btn.disabled = GameManager.gold < cost
+			else:
+				btn.text = "無裝備"
+				btn.disabled = true
+
+func _refresh_all_ui() -> void:
+	_update_header_and_buttons()
 	_refresh_equipment_ui()
 	_refresh_skills_ui()
 
 func _refresh_equipment_ui() -> void:
-	for c in equip_list_vbox.get_children():
-		c.queue_free()
+	# 1. 三格視覺化穿戴裝備槽 (若已建立則原地更新，避免重建節點導致 Tooltip 關閉！)
+	if equip_list_vbox.get_child_count() == 0:
+		equipped_upg_btns.clear()
+		var slots_hbox := HBoxContainer.new()
+		slots_hbox.name = "SlotsHBox"
+		slots_hbox.add_theme_constant_override("separation", 12)
+		equip_list_vbox.add_child(slots_hbox)
 
-	# 1. 三格視覺化穿戴裝備槽 (橫向並排卡片)
-	var slots_hbox := HBoxContainer.new()
-	slots_hbox.add_theme_constant_override("separation", 10)
-	equip_list_vbox.add_child(slots_hbox)
+		for slot_key in [EquipmentData.SlotType.WEAPON, EquipmentData.SlotType.ARMOR, EquipmentData.SlotType.SHIELD]:
+			var card := PanelContainer.new()
+			card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
-	var slot_names := {
-		EquipmentData.SlotType.WEAPON: "武器槽",
-		EquipmentData.SlotType.ARMOR: "裝甲槽",
-		EquipmentData.SlotType.SHIELD: "盾牌槽"
-	}
+			var margin := MarginContainer.new()
+			margin.add_theme_constant_override("margin_left", 8)
+			margin.add_theme_constant_override("margin_top", 8)
+			margin.add_theme_constant_override("margin_right", 8)
+			margin.add_theme_constant_override("margin_bottom", 8)
+			card.add_child(margin)
 
-	for slot_key in [EquipmentData.SlotType.WEAPON, EquipmentData.SlotType.ARMOR, EquipmentData.SlotType.SHIELD]:
-		var card := PanelContainer.new()
-		card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			var vbox := VBoxContainer.new()
+			vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+			vbox.add_theme_constant_override("separation", 6)
+			margin.add_child(vbox)
 
-		var margin := MarginContainer.new()
-		margin.add_theme_constant_override("margin_left", 8)
-		margin.add_theme_constant_override("margin_top", 8)
-		margin.add_theme_constant_override("margin_right", 8)
-		margin.add_theme_constant_override("margin_bottom", 8)
-		card.add_child(margin)
+			var icon_center := CenterContainer.new()
+			var icon := IconSlot.new(Vector2(64, 64))
+			icon.name = "SlotIcon"
+			icon_center.add_child(icon)
+			vbox.add_child(icon_center)
 
-		var vbox := VBoxContainer.new()
-		vbox.alignment = BoxContainer.ALIGNMENT_CENTER
-		vbox.add_theme_constant_override("separation", 6)
-		margin.add_child(vbox)
-
-		var item: EquipmentData = GameManager.equipped.get(slot_key)
-
-		# 置中視覺圖示槽
-		var icon_center := CenterContainer.new()
-		var icon := IconSlot.new(Vector2(60, 60))
-		icon.setup_equipment(item, slot_key)
-		icon_center.add_child(icon)
-		vbox.add_child(icon_center)
-
-		var name_lbl := Label.new()
-		name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		name_lbl.add_theme_font_size_override("font_size", 14)
-
-		var stat_lbl := Label.new()
-		stat_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		stat_lbl.add_theme_font_size_override("font_size", 12)
-		stat_lbl.add_theme_color_override("font_color", Color(0.78, 0.82, 0.9))
-
-		var upg_btn := Button.new()
-		if item != null:
-			name_lbl.text = "[%s] %s +%d" % [item.get_rarity_name(), item.item_name, item.level]
-			name_lbl.add_theme_color_override("font_color", item.get_rarity_color())
-			stat_lbl.text = "%s (戰力:%d)" % [item.get_summary_text(), item.get_power_score()]
-			var cost := item.get_upgrade_cost()
-			upg_btn.text = "強化 (%dG)" % cost
-			upg_btn.disabled = GameManager.gold < cost
+			var upg_btn := Button.new()
 			upg_btn.pressed.connect(func(): GameManager.upgrade_equipped(slot_key))
-		else:
-			name_lbl.text = "%s (空)" % slot_names[slot_key]
-			name_lbl.add_theme_color_override("font_color", Color(0.5, 0.52, 0.58))
-			stat_lbl.text = "尚未穿戴"
-			upg_btn.text = "無裝備"
-			upg_btn.disabled = true
+			equipped_upg_btns[slot_key] = { "btn": upg_btn, "icon": icon }
+			vbox.add_child(upg_btn)
+			slots_hbox.add_child(card)
 
-		vbox.add_child(name_lbl)
-		vbox.add_child(stat_lbl)
-		vbox.add_child(upg_btn)
-		slots_hbox.add_child(card)
+	# 原地更新三格穿戴裝備的圖示與強化按鈕
+	for slot_key in [EquipmentData.SlotType.WEAPON, EquipmentData.SlotType.ARMOR, EquipmentData.SlotType.SHIELD]:
+		if equipped_upg_btns.has(slot_key):
+			var entry: Dictionary = equipped_upg_btns[slot_key]
+			var icon: IconSlot = entry["icon"]
+			var upg_btn: Button = entry["btn"]
+			var item: EquipmentData = GameManager.equipped.get(slot_key)
+			icon.setup_equipment(item, slot_key, false)
+			if item != null:
+				var cost := item.get_upgrade_cost()
+				upg_btn.text = "強化 (%dG)" % cost
+				upg_btn.disabled = GameManager.gold < cost
+			else:
+				upg_btn.text = "無裝備"
+				upg_btn.disabled = true
 
 	# 更新自動穿最強 / 自動售出較弱按鈕狀態
 	if auto_equip_btn != null:
@@ -562,16 +869,16 @@ func _refresh_equipment_ui() -> void:
 		auto_sell_btn.disabled = (weak_cnt <= 0)
 		auto_sell_btn.text = ("💰 售出較弱裝備 (%d)" % weak_cnt) if weak_cnt > 0 else "💰 售出較弱裝備"
 
-	# 2. 備用背包視覺化欄位 (雙欄卡片網格)
-	for c in inv_list_vbox.get_children():
-		c.queue_free()
-
+	# 2. 備用背包視覺化欄位 (純 ICON 圖示網格：原地增減與更新，確保看 Tooltip 時即使打到新裝也不會跳掉！)
 	if GameManager.inventory.is_empty():
+		for c in inv_list_vbox.get_children():
+			c.queue_free()
 		var empty_box := HBoxContainer.new()
+		empty_box.name = "EmptyBox"
 		empty_box.add_theme_constant_override("separation", 10)
 		for empty_idx in range(4):
-			var empty_slot := IconSlot.new(Vector2(50, 50))
-			empty_slot.setup_equipment(null, (empty_idx % 3) as EquipmentData.SlotType)
+			var empty_slot := IconSlot.new(Vector2(56, 56))
+			empty_slot.setup_equipment(null, (empty_idx % 3) as EquipmentData.SlotType, false)
 			empty_box.add_child(empty_slot)
 		var empty_lbl := Label.new()
 		empty_lbl.text = "背包目前空空如也\n打怪掉落或點擊上方「鍛造」即可獲得裝備！"
@@ -580,76 +887,50 @@ func _refresh_equipment_ui() -> void:
 		empty_box.add_child(empty_lbl)
 		inv_list_vbox.add_child(empty_box)
 	else:
-		var grid := GridContainer.new()
-		grid.columns = 2
-		grid.add_theme_constant_override("h_separation", 8)
-		grid.add_theme_constant_override("v_separation", 8)
-		inv_list_vbox.add_child(grid)
+		var grid: GridContainer = inv_list_vbox.get_node_or_null("InvGrid")
+		if grid == null:
+			for c in inv_list_vbox.get_children():
+				c.queue_free()
+			var hint_lbl := Label.new()
+			hint_lbl.name = "HintLabel"
+			hint_lbl.text = "💡 滑鼠移至圖示查看詳細素質  |  🖱️ 左鍵點擊：穿戴  |  🖱️ 右鍵點擊：出售  |  (▲較強 / ▼較弱)"
+			hint_lbl.add_theme_font_size_override("font_size", 12)
+			hint_lbl.add_theme_color_override("font_color", Color(0.7, 0.75, 0.85))
+			inv_list_vbox.add_child(hint_lbl)
 
-		for i in range(GameManager.inventory.size()):
-			var inv_item: EquipmentData = GameManager.inventory[i]
-			var item_card := PanelContainer.new()
-			item_card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			grid = GridContainer.new()
+			grid.name = "InvGrid"
+			grid.columns = 9
+			grid.add_theme_constant_override("h_separation", 10)
+			grid.add_theme_constant_override("v_separation", 10)
+			inv_list_vbox.add_child(grid)
 
-			var margin := MarginContainer.new()
-			margin.add_theme_constant_override("margin_left", 6)
-			margin.add_theme_constant_override("margin_top", 6)
-			margin.add_theme_constant_override("margin_right", 6)
-			margin.add_theme_constant_override("margin_bottom", 6)
-			item_card.add_child(margin)
+		# 補足或裁減圖示節點數量，保留既有節點以維持滑鼠懸浮 Tooltip 狀態
+		var target_cnt := GameManager.inventory.size()
+		while grid.get_child_count() > target_cnt:
+			var last_child := grid.get_child(grid.get_child_count() - 1)
+			grid.remove_child(last_child)
+			last_child.queue_free()
 
-			var row := HBoxContainer.new()
-			row.add_theme_constant_override("separation", 8)
-			margin.add_child(row)
-
-			var icon := IconSlot.new(Vector2(52, 52))
-			icon.setup_equipment(inv_item, inv_item.slot)
-			row.add_child(icon)
-
-			var info_vbox := VBoxContainer.new()
-			info_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			info_vbox.add_theme_constant_override("separation", 2)
-
-			var is_stronger := GameManager.is_stronger_than_equipped(inv_item)
-			var is_weaker := GameManager.is_weaker_than_equipped(inv_item)
-			var cmp_tag := "🔼較強" if is_stronger else ("🔽較弱" if is_weaker else "🟰持平")
-
-			var title_lbl := Label.new()
-			title_lbl.text = "[%s] %s +%d  [%s]" % [inv_item.get_rarity_name(), inv_item.item_name, inv_item.level, cmp_tag]
-			title_lbl.add_theme_color_override("font_color", inv_item.get_rarity_color())
-			title_lbl.add_theme_font_size_override("font_size", 14)
-
-			var stat_lbl := Label.new()
-			stat_lbl.text = "[%s] %s (戰力:%d)" % [inv_item.get_slot_name(), inv_item.get_summary_text(), inv_item.get_power_score()]
-			stat_lbl.add_theme_font_size_override("font_size", 12)
-			stat_lbl.add_theme_color_override(
-				"font_color",
-				Color(0.55, 0.95, 0.65) if is_stronger else Color(0.78, 0.82, 0.88)
+		while grid.get_child_count() < target_cnt:
+			var idx := grid.get_child_count()
+			var icon := IconSlot.new(Vector2(62, 62))
+			icon.left_clicked.connect(func():
+				GameManager.equip_from_inventory(idx)
 			)
+			icon.right_clicked.connect(func():
+				GameManager.sell_inventory_item(idx)
+			)
+			grid.add_child(icon)
 
-			var btn_row := HBoxContainer.new()
-			btn_row.add_theme_constant_override("separation", 6)
-			var idx := i
+		# 原地刷新每個背包格的裝備資料與 Tooltip
+		for i in range(target_cnt):
+			var icon_node: IconSlot = grid.get_child(i)
+			var inv_item: EquipmentData = GameManager.inventory[i]
+			icon_node.setup_equipment(inv_item, inv_item.slot, true)
 
-			var eq_btn := Button.new()
-			eq_btn.text = "穿戴"
-			eq_btn.add_theme_font_size_override("font_size", 12)
-			eq_btn.pressed.connect(func(): GameManager.equip_from_inventory(idx))
 
-			var sell_btn := Button.new()
-			var sell_price := int(10 * inv_item.rarity * inv_item.level)
-			sell_btn.text = "出售(+%dG)" % sell_price
-			sell_btn.add_theme_font_size_override("font_size", 12)
-			sell_btn.pressed.connect(func(): GameManager.sell_inventory_item(idx))
 
-			btn_row.add_child(eq_btn)
-			btn_row.add_child(sell_btn)
-
-			info_vbox.add_child(title_lbl)
-			info_vbox.add_child(stat_lbl)
-			info_vbox.add_child(btn_row)
-			row.add_child(info_vbox)
-			grid.add_child(item_card)
 
 
 func _refresh_skills_ui() -> void:

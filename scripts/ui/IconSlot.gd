@@ -16,10 +16,15 @@ enum Kind {
 	SKILL_DEF_HP
 }
 
+signal left_clicked
+signal right_clicked
+
 var icon_kind: Kind = Kind.WEAPON
 var border_color: Color = Color(0.45, 0.48, 0.55)
 var accent_color: Color = Color(0.85, 0.85, 0.85)
 var badge_text: String = ""
+var compare_tag: String = "" # 左上角強弱提示 ("▲" 較強 / "▼" 較弱)
+var compare_color: Color = Color(0.3, 1.0, 0.5)
 var is_locked: bool = false
 var is_rainbow_border: bool = false
 var rainbow_hue: float = 0.0
@@ -28,7 +33,16 @@ var cooldown_sec: float = 0.0
 
 func _init(slot_size: Vector2 = Vector2(56, 56)) -> void:
 	custom_minimum_size = slot_size
-	mouse_filter = Control.MOUSE_FILTER_PASS
+	mouse_filter = Control.MOUSE_FILTER_STOP
+
+func _gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.pressed:
+		if event.button_index == MOUSE_BUTTON_LEFT:
+			left_clicked.emit()
+			accept_event()
+		elif event.button_index == MOUSE_BUTTON_RIGHT:
+			right_clicked.emit()
+			accept_event()
 
 func _process(delta: float) -> void:
 	if is_rainbow_border:
@@ -36,9 +50,10 @@ func _process(delta: float) -> void:
 		accent_color = Color.from_hsv(rainbow_hue, 0.72, 1.0)
 		queue_redraw()
 
-func setup_equipment(item: EquipmentData, empty_slot: EquipmentData.SlotType = EquipmentData.SlotType.WEAPON) -> void:
+func setup_equipment(item: EquipmentData, empty_slot: EquipmentData.SlotType = EquipmentData.SlotType.WEAPON, is_inventory_item: bool = false) -> void:
 	cooldown_ratio = 0.0
 	cooldown_sec = 0.0
+	compare_tag = ""
 	if item == null:
 		is_locked = true
 		is_rainbow_border = false
@@ -48,16 +63,39 @@ func setup_equipment(item: EquipmentData, empty_slot: EquipmentData.SlotType = E
 		match empty_slot:
 			EquipmentData.SlotType.WEAPON:
 				icon_kind = Kind.EMPTY_WEAPON
+				tooltip_text = "武器槽（尚未穿戴）"
 			EquipmentData.SlotType.ARMOR:
 				icon_kind = Kind.EMPTY_ARMOR
+				tooltip_text = "裝甲槽（尚未穿戴）"
 			EquipmentData.SlotType.SHIELD:
 				icon_kind = Kind.EMPTY_SHIELD
+				tooltip_text = "盾牌槽（尚未穿戴）"
 	else:
 		is_locked = false
 		is_rainbow_border = item.is_rainbow()
 		border_color = item.get_rarity_color()
 		accent_color = item.get_rarity_color()
 		badge_text = "+%d" % item.level
+		var tip := item.get_detailed_tooltip()
+		if is_inventory_item:
+			var is_stronger := GameManager.is_stronger_than_equipped(item)
+			var is_weaker := GameManager.is_weaker_than_equipped(item)
+			if is_stronger:
+				compare_tag = "▲"
+				compare_color = Color(0.3, 1.0, 0.5)
+				tip += "\n────────────────\n🔼 比目前穿戴的裝備更強！"
+			elif is_weaker:
+				compare_tag = "▼"
+				compare_color = Color(1.0, 0.45, 0.45)
+				tip += "\n────────────────\n🔽 比目前穿戴的裝備較弱"
+			else:
+				tip += "\n────────────────\n🟰 與目前穿戴戰力持平"
+			var sell_price := int(10 * item.rarity * item.level)
+			tip += "\n🖱️ [左鍵點擊] 穿戴裝備\n🖱️ [右鍵點擊] 出售 (+%d 金幣)" % sell_price
+		else:
+			var cost := item.get_upgrade_cost()
+			tip += "\n────────────────\n🔨 強化費用：%d 金幣" % cost
+		tooltip_text = tip
 		match item.slot:
 			EquipmentData.SlotType.WEAPON:
 				icon_kind = Kind.WEAPON
@@ -144,10 +182,62 @@ func _draw() -> void:
 	else:
 		draw_rect(rect.grow(-1.0), border_color, false, 2.5)
 
-	# 2. 繪製簡易幾何圖示 (Icon)
+	# 2. 繪製圖示：優先使用正式美術 ICON (assets/icons/*.png)，若無則自動退回下方原生幾何圖示備案
+	var custom_tex: Texture2D = null
+	match icon_kind:
+		Kind.EMPTY_WEAPON, Kind.WEAPON:
+			custom_tex = AssetLoader.get_equip_icon_texture(0)
+		Kind.EMPTY_ARMOR, Kind.ARMOR:
+			custom_tex = AssetLoader.get_equip_icon_texture(1)
+		Kind.EMPTY_SHIELD, Kind.SHIELD:
+			custom_tex = AssetLoader.get_equip_icon_texture(2)
+		Kind.SKILL_SLASH:
+			custom_tex = AssetLoader.get_skill_icon_texture("reckless")
+		Kind.SKILL_HEAL:
+			custom_tex = AssetLoader.get_skill_icon_texture("first_aid")
+		Kind.SKILL_ATK:
+			custom_tex = AssetLoader.get_skill_icon_texture("sword_mastery")
+		Kind.SKILL_ASPD:
+			custom_tex = AssetLoader.get_skill_icon_texture("wind_blessing")
+		Kind.SKILL_CRIT:
+			custom_tex = AssetLoader.get_skill_icon_texture("lethal")
+		Kind.SKILL_DEF_HP:
+			custom_tex = AssetLoader.get_skill_icon_texture("block")
+
 	var col := Color(0.42, 0.45, 0.52, 0.55) if is_locked else accent_color
 	var light_col := col.lerp(Color.WHITE, 0.45)
 
+	if custom_tex != null:
+		var icon_mod := Color(0.45, 0.48, 0.55, 0.40) if is_locked else Color.WHITE
+		draw_texture_rect(custom_tex, rect.grow(-4.0), false, icon_mod)
+	else:
+		_draw_procedural_icon(center, r, col, light_col)
+
+	# 3. 技能冷卻遮罩
+	if cooldown_ratio > 0.01:
+		var cd_h := s.y * cooldown_ratio
+		draw_rect(Rect2(0, s.y - cd_h, s.x, cd_h), Color(0.0, 0.0, 0.0, 0.68), true)
+		var font := ThemeDB.fallback_font
+		if font != null and cooldown_sec > 0.0:
+			var cd_str := "%.1fs" % cooldown_sec
+			draw_string(font, Vector2(6, center.y + 5), cd_str, HORIZONTAL_ALIGNMENT_CENTER, s.x - 12, 13, Color(1.0, 0.95, 0.4))
+
+	# 4. 右下角等級 / 狀態小標籤
+	if badge_text != "":
+		var font := ThemeDB.fallback_font
+		if font != null:
+			var b_col := Color(0.65, 0.65, 0.65) if is_locked else Color(1.0, 0.95, 0.75)
+			draw_rect(Rect2(2, s.y - 16, s.x - 4, 14), Color(0.05, 0.06, 0.09, 0.78), true)
+			draw_string(font, Vector2(4, s.y - 5), badge_text, HORIZONTAL_ALIGNMENT_RIGHT, s.x - 8, 11, b_col)
+
+	# 5. 左上角強弱提示小箭頭 (▲較強 / ▼較弱)
+	if compare_tag != "":
+		var font := ThemeDB.fallback_font
+		if font != null:
+			draw_rect(Rect2(3, 3, 14, 14), Color(0.05, 0.06, 0.09, 0.78), true)
+			draw_string(font, Vector2(4, 14), compare_tag, HORIZONTAL_ALIGNMENT_CENTER, 12, 11, compare_color)
+
+func _draw_procedural_icon(center: Vector2, r: float, col: Color, light_col: Color) -> void:
 	match icon_kind:
 		Kind.EMPTY_WEAPON, Kind.WEAPON:
 			# 武器(劍)圖示：斜向劍刃、護手、劍柄
@@ -240,19 +330,3 @@ func _draw() -> void:
 			draw_arc(center, r * 0.48, 0.0, TAU, 6, light_col, 3.0)
 			draw_circle(center, r * 0.22, col)
 
-	# 3. 技能冷卻遮罩
-	if cooldown_ratio > 0.01:
-		var cd_h := s.y * cooldown_ratio
-		draw_rect(Rect2(0, s.y - cd_h, s.x, cd_h), Color(0.0, 0.0, 0.0, 0.68), true)
-		var font := ThemeDB.fallback_font
-		if font != null and cooldown_sec > 0.0:
-			var cd_str := "%.1fs" % cooldown_sec
-			draw_string(font, Vector2(6, center.y + 5), cd_str, HORIZONTAL_ALIGNMENT_CENTER, s.x - 12, 13, Color(1.0, 0.95, 0.4))
-
-	# 4. 右下角等級 / 狀態小標籤
-	if badge_text != "":
-		var font := ThemeDB.fallback_font
-		if font != null:
-			var b_col := Color(0.65, 0.65, 0.65) if is_locked else Color(1.0, 0.95, 0.75)
-			draw_rect(Rect2(2, s.y - 16, s.x - 4, 14), Color(0.05, 0.06, 0.09, 0.78), true)
-			draw_string(font, Vector2(4, s.y - 5), badge_text, HORIZONTAL_ALIGNMENT_RIGHT, s.x - 8, 11, b_col)

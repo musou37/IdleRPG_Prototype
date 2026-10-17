@@ -22,3 +22,17 @@
    - **步驟 1（拉取雲端）**：自動執行 `$env:GIT_TERMINAL_PROMPT="0"; $env:GCM_INTERACTIVE="never"; git pull --rebase --autostash origin main` 從 GitHub 拉取最新進度。
    - **步驟 2（讀取對話記憶）**：自動讀取 `PROGRESS.md` 的內容。
    - **步驟 3（回報與銜接）**：回報更新狀態、最新的 Commit 紀錄，並主動向使用者摘要 `PROGRESS.md` 中紀錄的「上次開發進度與下一步待辦」，讓使用者能直接接著對話開發。
+
+## 遊戲快捷啟動指令 (Game Launch Command)
+
+當使用者在對話中輸入 **「執行」/「啟動」/「跑遊戲」/ `/run`** 時，請直接在後台啟動 Godot 運行遊戲，無須再次詢問確認：
+
+```powershell
+$godot = "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\GodotEngine.GodotEngine_Microsoft.Winget.Source_8wekyb3d8bbwe\Godot_v4.7.2-stable_win64.exe"
+if (-not (Test-Path ".godot\global_script_class_cache.cfg")) {
+    & $godot --headless --import --path "$PWD"
+}
+Start-Process $godot -ArgumentList "--path `"$PWD`" --position 200,50"
+```
+啟動後簡短回報遊戲已成功開啟即可。
+

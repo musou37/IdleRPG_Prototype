@@ -107,3 +107,50 @@ func get_summary_text() -> String:
 	if get_crit_dmg() > 0.0:
 		parts.append("暴傷+%d%%" % int(round(get_crit_dmg() * 100.0)))
 	return " / ".join(parts)
+
+func get_detailed_tooltip() -> String:
+	var lines: Array[String] = []
+	lines.append("【%s】%s +%d" % [get_rarity_name(), item_name, level])
+	lines.append("部位：%s  |  戰力：%d" % [get_slot_name(), get_power_score()])
+	lines.append("────────────────")
+	if get_atk() > 0:
+		lines.append("⚔️ 攻擊力：+%d" % get_atk())
+	if get_def() > 0:
+		lines.append("🛡️ 防禦力：+%d" % get_def())
+	if get_hp() > 0:
+		lines.append("❤️ 生命值：+%d" % get_hp())
+	if get_crit_rate() > 0.0:
+		lines.append("💥 暴擊率：+%.1f%%" % (get_crit_rate() * 100.0))
+	if get_crit_dmg() > 0.0:
+		lines.append("🔥 暴擊傷害：+%d%%" % int(round(get_crit_dmg() * 100.0)))
+	return "\n".join(lines)
+
+
+func to_dict() -> Dictionary:
+	return {
+		"id": id,
+		"item_name": item_name,
+		"slot": slot,
+		"level": level,
+		"rarity": rarity,
+		"base_atk": base_atk,
+		"base_hp": base_hp,
+		"base_def": base_def,
+		"base_crit_rate": base_crit_rate,
+		"base_crit_dmg": base_crit_dmg
+	}
+
+static func from_dict(d: Dictionary) -> EquipmentData:
+	var item := EquipmentData.new()
+	item.id = d.get("id", "")
+	item.item_name = d.get("item_name", "未命名裝備")
+	item.slot = int(d.get("slot", SlotType.WEAPON)) as SlotType
+	item.level = int(d.get("level", 1))
+	item.rarity = int(d.get("rarity", Rarity.WHITE))
+	item.base_atk = int(d.get("base_atk", 0))
+	item.base_hp = int(d.get("base_hp", 0))
+	item.base_def = int(d.get("base_def", 0))
+	item.base_crit_rate = float(d.get("base_crit_rate", 0.0))
+	item.base_crit_dmg = float(d.get("base_crit_dmg", 0.0))
+	return item
+

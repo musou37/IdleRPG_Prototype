@@ -84,3 +84,16 @@ func get_display_desc() -> String:
 		SkillType.PASSIVE_BLOCK:
 			return "%s受擊時有 %.0f%% 機率格檔，減免 30%% 傷害 (每級+1%%機率)" % [prefix, val * 100.0]
 	return description
+
+func to_dict() -> Dictionary:
+	return {
+		"id": id,
+		"level": level,
+		"points_spent": points_spent
+	}
+
+func apply_dict(d: Dictionary) -> void:
+	level = int(d.get("level", level))
+	points_spent = int(d.get("points_spent", points_spent))
+	current_cd = 0.0
+
