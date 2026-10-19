@@ -13,8 +13,11 @@ const PATH_BG_NORMAL := "res://assets/backgrounds/bg_normal.png"
 const PATH_BG_BOSS_RUSH := "res://assets/backgrounds/bg_boss_rush.png"
 
 const PATH_SPRITE_HERO := "res://assets/sprites/hero.png"
+const PATH_SPRITE_HERO_ATTACK := "res://assets/sprites/hero_attack.png"
 const PATH_SPRITE_MONSTER_NORMAL := "res://assets/sprites/monster_normal.png"
+const PATH_SPRITE_MONSTER_NORMAL_ATTACK := "res://assets/sprites/monster_normal_attack.png"
 const PATH_SPRITE_MONSTER_BOSS := "res://assets/sprites/monster_boss.png"
+const PATH_SPRITE_MONSTER_BOSS_ATTACK := "res://assets/sprites/monster_boss_attack.png"
 
 const PATH_CHEST_ORNATE := "res://assets/sprites/chest_ornate.png"
 const PATH_CHEST_LUXURY := "res://assets/sprites/chest_luxury.png"
@@ -63,36 +66,59 @@ static func get_texture(res_path: String) -> Texture2D:
 	_tex_cache[res_path] = null
 	return null
 
-## 依怪物名稱與是否為菁英/BOSS，自動挑選對應的怪物貼圖（支援個別怪物專屬貼圖擴充）
-static func get_monster_texture(enemy_name: String, is_boss: bool) -> Texture2D:
+## 取得勇者貼圖（支援待機與攻擊動作切換）
+static func get_hero_texture(is_attacking: bool = false) -> Texture2D:
+	if not use_custom_assets:
+		return null
+	if is_attacking:
+		var atk_tex := get_texture(PATH_SPRITE_HERO_ATTACK)
+		if atk_tex != null:
+			return atk_tex
+	return get_texture(PATH_SPRITE_HERO)
+
+## 依怪物名稱、是否為菁英/BOSS 與是否正在攻擊，自動挑選對應的怪物貼圖
+static func get_monster_texture(enemy_name: String, is_boss: bool, is_attacking: bool = false) -> Texture2D:
 	if not use_custom_assets:
 		return null
 
 	# 1. 優先檢查是否有該怪物專屬命名的貼圖
-	var specific_path := ""
+	var specific_base := ""
 	if enemy_name.contains("史萊姆"):
-		specific_path = "res://assets/sprites/monster_slime.png"
+		specific_base = "res://assets/sprites/monster_slime"
 	elif enemy_name.contains("哥布林"):
-		specific_path = "res://assets/sprites/monster_goblin.png"
+		specific_base = "res://assets/sprites/monster_goblin"
 	elif enemy_name.contains("骷髏"):
-		specific_path = "res://assets/sprites/monster_skeleton.png"
+		specific_base = "res://assets/sprites/monster_skeleton"
 	elif enemy_name.contains("半獸人"):
-		specific_path = "res://assets/sprites/monster_orc.png"
+		specific_base = "res://assets/sprites/monster_orc"
 	elif enemy_name.contains("巨龍") or enemy_name.contains("魔龍"):
-		specific_path = "res://assets/sprites/monster_dragon.png"
+		specific_base = "res://assets/sprites/monster_dragon"
 	elif enemy_name.contains("魔王"):
-		specific_path = "res://assets/sprites/monster_demon.png"
+		specific_base = "res://assets/sprites/monster_demon"
 
-	if specific_path != "":
-		var spec_tex := get_texture(specific_path)
+	if specific_base != "":
+		if is_attacking:
+			var spec_atk_tex := get_texture(specific_base + "_attack.png")
+			if spec_atk_tex != null:
+				return spec_atk_tex
+		var spec_tex := get_texture(specific_base + ".png")
 		if spec_tex != null:
 			return spec_tex
 
-	# 2. 退回通用「菁英/BOSS 怪物圖」或「一般怪物圖」
+	# 2. 退回通用「菁英/BOSS 怪物圖」或「一般怪物圖」（含攻擊動作切換）
 	if is_boss:
+		if is_attacking:
+			var boss_atk_tex := get_texture(PATH_SPRITE_MONSTER_BOSS_ATTACK)
+			if boss_atk_tex != null:
+				return boss_atk_tex
 		var boss_tex := get_texture(PATH_SPRITE_MONSTER_BOSS)
 		if boss_tex != null:
 			return boss_tex
+
+	if is_attacking:
+		var norm_atk_tex := get_texture(PATH_SPRITE_MONSTER_NORMAL_ATTACK)
+		if norm_atk_tex != null:
+			return norm_atk_tex
 	return get_texture(PATH_SPRITE_MONSTER_NORMAL)
 
 ## 依裝備部位取得對應 ICON 貼圖

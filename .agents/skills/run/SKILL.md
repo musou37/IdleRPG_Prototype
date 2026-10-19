@@ -11,9 +11,11 @@ When the user asks to run or play the game (e.g. inputs "執行", "啟動", "跑
 
 1. **Launch the game process directly using PowerShell**:
    ```powershell
-   $godot = "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\GodotEngine.GodotEngine_Microsoft.Winget.Source_8wekyb3d8bbwe\Godot_v4.7.2-stable_win64.exe"
+   $godotDir = "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\GodotEngine.GodotEngine_Microsoft.Winget.Source_8wekyb3d8bbwe"
+   $godot = "$godotDir\Godot_v4.7.2-stable_win64.exe"
+   $godotConsole = "$godotDir\Godot_v4.7.2-stable_win64_console.exe"
    if (-not (Test-Path ".godot\global_script_class_cache.cfg")) {
-       & $godot --headless --import --path "$PWD"
+       & $godotConsole --headless --editor --quit --path "$PWD" | Out-Null
    }
    Start-Process $godot -ArgumentList "--path `"$PWD`" --position 200,50"
    ```

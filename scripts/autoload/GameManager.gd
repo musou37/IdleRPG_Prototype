@@ -468,20 +468,8 @@ func generate_random_equipment(stage_tier: int, source_type: String = "forge") -
 			item.item_name = "%s%s" % [prefix, names[randi() % names.size()]]
 			item.base_def = maxi(1, int(round((3 + stage_tier * 2 + randi_range(0, 2)) * stat_mult)))
 
-	# 隨機附加暴擊率 / 暴擊傷害詞綴（隨 1~6 品階提升機率，彩虹框 100% 雙暴詞綴）
-	var crit_rate_chance := 0.15 + (item.rarity - 1) * 0.15
-	var crit_dmg_chance := 0.15 + (item.rarity - 1) * 0.15
-	if item.rarity >= EquipmentData.Rarity.RAINBOW:
-		crit_rate_chance = 1.0
-		crit_dmg_chance = 1.0
-	elif source_type == "normal":
-		crit_rate_chance *= 0.5
-		crit_dmg_chance *= 0.5
-
-	if randf() < crit_rate_chance:
-		item.base_crit_rate = snappedf(randf_range(0.02, 0.06), 0.005) # 基礎 +2.0% ~ +6.0% 暴擊率
-	if randf() < crit_dmg_chance:
-		item.base_crit_dmg = snappedf(randf_range(0.10, 0.30), 0.05) # 基礎 +10% ~ +30% 暴擊倍率
+	# 依品階決定副屬性項目數量（白0、綠1、藍2、紫3、橘4、彩虹5）與數值（不隨裝備強化等級成長）
+	item.roll_sub_stats(stage_tier, stat_mult)
 
 	item.level = 1
 	return item

@@ -9,10 +9,13 @@ description: >-
 
 When the user requests to download or sync the latest progress from GitHub:
 
-1. **Ensure `git` is in `PATH` and pull latest changes** in the workspace root (with non-interactive env vars to prevent background hanging):
+1. **Ensure `git` is in `PATH`, pull latest changes, and refresh Godot class/asset cache**:
    ```powershell
    if (-not (Get-Command git -ErrorAction SilentlyContinue)) { $env:Path += ";C:\Program Files\Git\cmd" }
    $env:GIT_TERMINAL_PROMPT="0"; $env:GCM_INTERACTIVE="never"; git pull --rebase --autostash origin main
+   Remove-Item ".godot\global_script_class_cache.cfg" -Force -ErrorAction SilentlyContinue
+   $godotConsole = "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\GodotEngine.GodotEngine_Microsoft.Winget.Source_8wekyb3d8bbwe\Godot_v4.7.2-stable_win64_console.exe"
+   if (Test-Path $godotConsole) { & $godotConsole --headless --editor --quit --path "$PWD" | Out-Null }
    ```
 
 2. **Check the latest commit log and status**:
