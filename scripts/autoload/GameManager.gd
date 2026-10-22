@@ -36,6 +36,9 @@ var base_def: int = 3
 var base_aspd: float = 1.0 # 每秒攻擊次數
 var base_crit_rate: float = 0.05 # 初始暴擊率 5%
 var base_crit_dmg: float = 1.5 # 初始暴擊倍率 1.5倍 (未觸發為 1.0倍)
+var base_combo_rate: float = 0.05 # 初始連擊率 5%
+var base_direct_dmg: int = 0 # 初始直接傷害 0 (無視減免)
+var base_dodge_rate: float = 0.0 # 初始迴避率 0%
 
 # 裝備系統：目前穿戴的 3 個部位 (武器、裝甲、盾牌) 與背包清單
 var equipped: Dictionary = {
@@ -212,6 +215,27 @@ func get_total_crit_dmg() -> float:
 		if s.is_learned() and s.skill_type == SkillData.SkillType.PASSIVE_CRIT:
 			total += s.get_effect_value()
 	return snappedf(total, 0.01)
+
+func get_total_combo_rate() -> float:
+	var total := base_combo_rate
+	for item: EquipmentData in equipped.values():
+		if item != null:
+			total += item.get_combo_rate()
+	return clampf(total, 0.0, 1.0)
+
+func get_total_direct_dmg() -> int:
+	var total := base_direct_dmg
+	for item: EquipmentData in equipped.values():
+		if item != null:
+			total += item.get_direct_dmg()
+	return maxi(0, total)
+
+func get_total_dodge_rate() -> float:
+	var total := base_dodge_rate
+	for item: EquipmentData in equipped.values():
+		if item != null:
+			total += item.get_dodge_rate()
+	return clampf(total, 0.0, 0.95)
 
 func get_block_chance() -> float:
 	var total := 0.0

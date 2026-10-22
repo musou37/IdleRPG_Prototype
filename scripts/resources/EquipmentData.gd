@@ -11,7 +11,16 @@ enum Rarity {
 	RAINBOW = 6  # 神話 (彩虹框) - 5 項副屬性
 }
 
-const SUB_STAT_TYPES: Array[String] = ["atk", "def", "hp", "crit_rate", "crit_dmg"]
+const SUB_STAT_TYPES: Array[String] = [
+	"atk",
+	"def",
+	"hp",
+	"crit_rate",
+	"crit_dmg",
+	"combo_rate",
+	"direct_dmg",
+	"dodge_rate"
+]
 
 @export var id: String = ""
 @export var item_name: String = "未命名裝備"
@@ -101,6 +110,15 @@ func get_crit_rate() -> float:
 func get_crit_dmg() -> float:
 	return snappedf(get_sub_stat_total("crit_dmg"), 0.01)
 
+func get_combo_rate() -> float:
+	return snappedf(get_sub_stat_total("combo_rate"), 0.001)
+
+func get_direct_dmg() -> int:
+	return int(round(get_sub_stat_total("direct_dmg")))
+
+func get_dodge_rate() -> float:
+	return snappedf(get_sub_stat_total("dodge_rate"), 0.001)
+
 # 依裝備品階與當前進度生成副屬性
 # 規則：
 # 1. 數量 = rarity - 1（白裝 0 項、綠裝 1 項 ... 彩虹 5 項）
@@ -156,6 +174,21 @@ func _roll_single_sub_stat_value(st_type: String, stage_tier: int, r_mult: float
 			var min_cd := 0.08 + r_idx * 0.08
 			var max_cd := 0.14 + r_idx * 0.11
 			return snappedf(randf_range(min_cd, max_cd), 0.01)
+		"combo_rate":
+			# 依品階決定連擊率範圍：綠(1.5%~2.5%)、藍(2.5%~4.0%)、紫(4.0%~5.5%)、橘(5.5%~7.5%)、彩虹(7.5%~10.0%)
+			var r_idx := maxi(0, rarity - 2)
+			var min_cb := 0.015 + r_idx * 0.014
+			var max_cb := 0.025 + r_idx * 0.018
+			return snappedf(randf_range(min_cb, max_cb), 0.005)
+		"direct_dmg":
+			# 依品階與當前層級決定直接傷害（無視減免）
+			return float(maxi(1, int(round((1.5 + tier_lvl * 1.2 + randf_range(0.0, 2.0)) * r_mult))))
+		"dodge_rate":
+			# 依品階決定迴避率範圍：綠(1.0%~2.0%)、藍(2.0%~3.5%)、紫(3.5%~5.0%)、橘(5.0%~6.5%)、彩虹(6.5%~8.5%)
+			var r_idx := maxi(0, rarity - 2)
+			var min_dg := 0.010 + r_idx * 0.012
+			var max_dg := 0.020 + r_idx * 0.016
+			return snappedf(randf_range(min_dg, max_dg), 0.005)
 	return 1.0
 
 func get_upgrade_cost() -> int:
@@ -198,6 +231,9 @@ func get_power_score() -> int:
 		+ get_hp() * 2
 		+ int(round(get_crit_rate() * 100.0)) * 18
 		+ int(round(get_crit_dmg() * 100.0)) * 6
+		+ int(round(get_combo_rate() * 100.0)) * 18
+		+ get_direct_dmg() * 14
+		+ int(round(get_dodge_rate() * 100.0)) * 20
 	)
 
 func _format_stat_line(st_type: String, val: float) -> String:
@@ -212,6 +248,12 @@ func _format_stat_line(st_type: String, val: float) -> String:
 			return "💥 暴擊率：+%.1f%%" % (val * 100.0)
 		"crit_dmg":
 			return "🔥 暴擊傷害：+%d%%" % int(round(val * 100.0))
+		"combo_rate":
+			return "🔁 連擊率：+%.1f%%" % (val * 100.0)
+		"direct_dmg":
+			return "🗡️ 直接傷害：+%d" % int(round(val))
+		"dodge_rate":
+			return "🍃 迴避率：+%.1f%%" % (val * 100.0)
 	return ""
 
 func get_summary_text() -> String:
@@ -226,6 +268,12 @@ func get_summary_text() -> String:
 		parts.append("暴率+%.1f%%" % (get_crit_rate() * 100.0))
 	if get_crit_dmg() > 0.0:
 		parts.append("暴傷+%d%%" % int(round(get_crit_dmg() * 100.0)))
+	if get_combo_rate() > 0.0:
+		parts.append("連擊+%.1f%%" % (get_combo_rate() * 100.0))
+	if get_direct_dmg() > 0:
+		parts.append("直傷+%d" % get_direct_dmg())
+	if get_dodge_rate() > 0.0:
+		parts.append("迴避+%.1f%%" % (get_dodge_rate() * 100.0))
 	return " / ".join(parts)
 
 func get_detailed_tooltip() -> String:

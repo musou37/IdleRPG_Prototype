@@ -31,6 +31,9 @@ var enemy_max_hp: int = 45
 var enemy_hp: int = 45
 var enemy_atk: int = 6
 var enemy_aspd: float = 1.0 # 怪物攻速固定為 1.0 次/秒，不再成長
+var enemy_combo_rate: float = 0.05 # 敵方連擊率 (初始 5%)
+var enemy_direct_dmg: int = 0 # 敵方直接傷害 (初始 0，無視減免)
+var enemy_dodge_rate: float = 0.0 # 敵方迴避率 (初始 0%)
 var enemy_atk_timer: float = 0.0
 var enemy_is_elite: bool = false
 var prev_enemy_max_hp: int = 45
@@ -528,44 +531,105 @@ func _cast_active_skill(skill: SkillData) -> void:
 			_spawn_floating_text(arena.hero_pos + Vector2(0, -85), "+%d HP" % heal_amount, Color(0.3, 1.0, 0.45))
 			_append_log("💚 施放【%s】回復了 %d 點生命！" % [skill.skill_name, heal_amount])
 
-func _perform_hero_attack(dmg_multiplier: float, is_skill: bool) -> void:
+func _perform_hero_attack(dmg_multiplier: float, is_skill: bool, is_combo: bool = false) -> void:
+	if is_reviving or enemy_hp <= 0:
+		return
+
 	arena.trigger_hero_attack()
-	arena.trigger_enemy_hit(is_skill)
 
-	var is_crit := randf() < GameManager.get_total_crit_rate()
-	var crit_mult := GameManager.get_total_crit_dmg() if is_crit else 1.0
-	var raw_dmg := int(round(GameManager.get_total_atk() * dmg_multiplier * crit_mult))
-	raw_dmg = maxi(1, raw_dmg)
-	enemy_hp = maxi(0, enemy_hp - raw_dmg)
-	_update_combat_bars()
-
-	var color := Color(1.0, 0.55, 0.15) if is_skill else (Color(1.0, 0.9, 0.2) if is_crit else Color.WHITE)
-	var prefix := "技能! " if is_skill else ("暴擊! " if is_crit else "")
-	_spawn_floating_text(arena.enemy_pos + Vector2(randf_range(-20, 20), -85), "%s-%d" % [prefix, raw_dmg], color)
-
-	if enemy_hp <= 0:
-		_on_enemy_defeated()
-
-func _perform_enemy_attack() -> void:
-	arena.trigger_enemy_attack()
-	arena.trigger_hero_hit()
-
-	var dmg := maxi(1, enemy_atk - GameManager.get_total_def())
-	var is_blocked := randf() < GameManager.get_block_chance()
-	if is_blocked:
-		dmg = maxi(1, int(round(dmg * (1.0 - GameManager.get_block_reduction()))))
-
-	hero_hp = maxi(0, hero_hp - dmg)
-	_update_combat_bars()
-
-	if is_blocked:
-		_spawn_floating_text(arena.hero_pos + Vector2(randf_range(-15, 15), -85), "🛡️格檔! -%d" % dmg, Color(0.45, 0.9, 1.0))
-		_append_log("🛡️ 觸發【格檔】！減免 30%% 傷害，僅受到 %d 點傷害。" % dmg)
+	# 1. 迴避判定：每次攻擊前先判定敵方迴避，成功則該次攻擊失敗不造成傷害
+	if randf() < enemy_dodge_rate:
+		var miss_prefix := "連擊 " if is_combo else ("技能 " if is_skill else "")
+		_spawn_floating_text(arena.enemy_pos + Vector2(randf_range(-20, 20), -85 if not is_combo else -112), "💨%s閃避! MISS" % miss_prefix, Color(0.65, 0.88, 1.0))
+		_append_log("💨 %s 迴避了勇者的%s！" % [enemy_name, ("技能攻擊" if is_skill else ("連擊普攻" if is_combo else "普通攻擊"))])
 	else:
-		_spawn_floating_text(arena.hero_pos + Vector2(randf_range(-15, 15), -85), "-%d" % dmg, Color(1.0, 0.35, 0.35))
+		arena.trigger_enemy_hit(is_skill)
 
-	if hero_hp <= 0:
-		_on_hero_defeated()
+		var is_crit := randf() < GameManager.get_total_crit_rate()
+		var crit_mult := GameManager.get_total_crit_dmg() if is_crit else 1.0
+		var raw_dmg := int(round(GameManager.get_total_atk() * dmg_multiplier * crit_mult))
+		raw_dmg = maxi(1, raw_dmg)
+
+		# 2. 直接傷害：無視所有減免，直接在最終傷害加入
+		var direct_dmg := GameManager.get_total_direct_dmg()
+		var final_dmg := raw_dmg + direct_dmg
+
+		enemy_hp = maxi(0, enemy_hp - final_dmg)
+		_update_combat_bars()
+
+		var color := Color(1.0, 0.55, 0.15) if is_skill else (Color(0.35, 0.95, 1.0) if is_combo else (Color(1.0, 0.9, 0.2) if is_crit else Color.WHITE))
+		var prefix := ""
+		if is_combo:
+			prefix += "連擊! "
+		if is_skill:
+			prefix += "技能! "
+		elif is_crit:
+			prefix += "暴擊! "
+		var y_offset := -112.0 if is_combo else -85.0
+		_spawn_floating_text(arena.enemy_pos + Vector2(randf_range(-20, 20), y_offset), "%s-%d" % [prefix, final_dmg], color)
+
+		if enemy_hp <= 0:
+			_on_enemy_defeated()
+			return
+
+	# 3. 連擊判定：每次進行普通攻擊時有機率再觸發一次普通攻擊（由連擊觸發的普攻不會再觸發連擊）
+	if not is_skill and not is_combo and enemy_hp > 0:
+		if randf() < GameManager.get_total_combo_rate():
+			_append_log("⚡ 勇者觸發【連擊】！追加一次普通攻擊！")
+			var combo_tw := create_tween()
+			combo_tw.tween_interval(0.14)
+			combo_tw.tween_callback(func():
+				if not is_reviving and enemy_hp > 0:
+					_perform_hero_attack(1.0, false, true)
+			)
+
+func _perform_enemy_attack(is_combo: bool = false) -> void:
+	if is_reviving or hero_hp <= 0 or enemy_hp <= 0:
+		return
+
+	arena.trigger_enemy_attack()
+
+	# 1. 迴避判定：每次攻擊前先判定勇者迴避，成功則該次攻擊失敗不造成傷害
+	if randf() < GameManager.get_total_dodge_rate():
+		var miss_prefix := "連擊 " if is_combo else ""
+		_spawn_floating_text(arena.hero_pos + Vector2(randf_range(-15, 15), -85 if not is_combo else -112), "🍃%s閃避! MISS" % miss_prefix, Color(0.45, 1.0, 0.65))
+		_append_log("🍃 勇者成功【迴避】了 %s 的%s！" % [enemy_name, ("連擊攻擊" if is_combo else "普通攻擊")])
+	else:
+		arena.trigger_hero_hit()
+
+		var mitigated_dmg := maxi(1, enemy_atk - GameManager.get_total_def())
+		var is_blocked := randf() < GameManager.get_block_chance()
+		if is_blocked:
+			mitigated_dmg = maxi(1, int(round(mitigated_dmg * (1.0 - GameManager.get_block_reduction()))))
+
+		# 2. 直接傷害：無視防禦與格檔等所有減免，直接在最終傷害加入
+		var final_dmg := mitigated_dmg + enemy_direct_dmg
+
+		hero_hp = maxi(0, hero_hp - final_dmg)
+		_update_combat_bars()
+
+		var combo_tag := "連擊! " if is_combo else ""
+		var y_offset := -112.0 if is_combo else -85.0
+		if is_blocked:
+			_spawn_floating_text(arena.hero_pos + Vector2(randf_range(-15, 15), y_offset), "🛡️%s格檔! -%d" % [combo_tag, final_dmg], Color(0.45, 0.9, 1.0))
+			_append_log("🛡️ 觸發【格檔】！減免 30%% 傷害，僅受到 %d 點傷害。" % final_dmg)
+		else:
+			_spawn_floating_text(arena.hero_pos + Vector2(randf_range(-15, 15), y_offset), "%s-%d" % [combo_tag, final_dmg], Color(1.0, 0.55, 0.25) if is_combo else Color(1.0, 0.35, 0.35))
+
+		if hero_hp <= 0:
+			_on_hero_defeated()
+			return
+
+	# 3. 敵方連擊判定：每次進行普通攻擊時有機率再觸發一次普通攻擊（由連擊觸發的普攻不會再觸發連擊）
+	if not is_combo and not is_reviving and hero_hp > 0 and enemy_hp > 0:
+		if randf() < enemy_combo_rate:
+			_append_log("⚡ %s 觸發【連擊】！追加一次普通攻擊！" % enemy_name)
+			var enemy_combo_tw := create_tween()
+			enemy_combo_tw.tween_interval(0.14)
+			enemy_combo_tw.tween_callback(func():
+				if not is_reviving and hero_hp > 0 and enemy_hp > 0:
+					_perform_enemy_attack(true)
+			)
 
 func _on_enemy_defeated() -> void:
 	# 紀錄上一隻怪物的屬性（只有一般怪死亡時才更新基準，避免菁英怪或 BOSS RUSH 連續乘上倍率暴增）
@@ -704,6 +768,11 @@ func _spawn_enemy() -> void:
 		prev_enemy_max_hp = enemy_max_hp
 		prev_enemy_atk = enemy_atk
 
+	# 敵方怪物新增基礎屬性初始值：連擊率 5%、直接傷害 0、迴避率 0%
+	enemy_combo_rate = 0.05
+	enemy_direct_dmg = 0
+	enemy_dodge_rate = 0.0
+
 	arena.enemy_title = enemy_name
 	arena.queue_redraw()
 	enemy_atk_timer = 0.0
@@ -752,7 +821,13 @@ func _update_combat_bars() -> void:
 		hero_hp_bar.value = hero_hp
 		$BattleViewport/HeroHUD/HPLabel.text = "勇者 HP: %d / %d" % [hero_hp, max_hp]
 
-	enemy_name_label.text = "%s (攻擊:%d)" % [enemy_name, enemy_atk]
+	enemy_name_label.text = "%s (攻:%d | 連擊:%.0f%% | 直傷:%d | 迴避:%.0f%%)" % [
+		enemy_name,
+		enemy_atk,
+		enemy_combo_rate * 100.0,
+		enemy_direct_dmg,
+		enemy_dodge_rate * 100.0
+	]
 	enemy_hp_bar.max_value = enemy_max_hp
 	enemy_hp_bar.value = enemy_hp
 	$BattleViewport/EnemyHUD/HPLabel.text = "HP: %d / %d" % [enemy_hp, enemy_max_hp]
@@ -773,7 +848,7 @@ func _update_stage_label_text() -> void:
 
 func _update_header_and_buttons() -> void:
 	_update_stage_label_text()
-	stats_label.text = "Lv.%d 勇者  |  💰 金幣: %d  |  📘 技能點: %d  |  💥 暴率: %.1f%%  |  🔥 暴傷: %.2fx\n❤️ 生命: %d   ⚔️ 攻擊: %d   🛡️ 防禦: %d   ⚡ 攻速: %.2f/秒" % [
+	stats_label.text = "Lv.%d 勇者  |  💰 金幣: %d  |  📘 技能點: %d  |  💥 暴率: %.1f%%  |  🔥 暴傷: %.2fx\n❤️ 生命: %d   ⚔️ 攻擊: %d   🛡️ 防禦: %d   ⚡ 攻速: %.2f/秒   |   🔁 連擊: %.1f%%   🗡️ 直傷: %d   🍃 迴避: %.1f%%" % [
 		GameManager.level,
 		GameManager.gold,
 		GameManager.skill_points,
@@ -782,7 +857,10 @@ func _update_header_and_buttons() -> void:
 		GameManager.get_total_max_hp(),
 		GameManager.get_total_atk(),
 		GameManager.get_total_def(),
-		GameManager.get_total_aspd()
+		GameManager.get_total_aspd(),
+		GameManager.get_total_combo_rate() * 100.0,
+		GameManager.get_total_direct_dmg(),
+		GameManager.get_total_dodge_rate() * 100.0
 	]
 	exp_bar.max_value = GameManager.get_max_exp()
 	exp_bar.value = GameManager.current_exp
