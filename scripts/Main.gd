@@ -848,7 +848,7 @@ func _update_stage_label_text() -> void:
 
 func _update_header_and_buttons() -> void:
 	_update_stage_label_text()
-	stats_label.text = "Lv.%d 勇者  |  💰 金幣: %d  |  📘 技能點: %d  |  💥 暴率: %.1f%%  |  🔥 暴傷: %.2fx\n❤️ 生命: %d   ⚔️ 攻擊: %d   🛡️ 防禦: %d   ⚡ 攻速: %.2f/秒   |   🔁 連擊: %.1f%%   🗡️ 直傷: %d   🍃 迴避: %.1f%%" % [
+	stats_label.text = "Lv.%d 勇者 | 💰 金幣: %d | 📘 技能點: %d | 💥 暴率: %.1f%% | 🔥 暴傷: %.2fx\n❤️ 生命: %d | ⚔️ 攻擊: %d | 🛡️ 防禦: %d | ⚡ 攻速: %.2f/秒 | 🔁 連擊: %.1f%% | 🗡️ 直傷: %d | 🍃 迴避: %.1f%%" % [
 		GameManager.level,
 		GameManager.gold,
 		GameManager.skill_points,

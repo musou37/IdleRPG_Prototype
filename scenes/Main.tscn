@@ -66,14 +66,14 @@ show_percentage = false
 
 [node name="EnemyHUD" type="VBoxContainer" parent="BattleViewport"]
 layout_mode = 0
-offset_left = 410.0
+offset_left = 385.0
 offset_top = 248.0
-offset_right = 680.0
+offset_right = 706.0
 offset_bottom = 304.0
 
 [node name="NameLabel" type="Label" parent="BattleViewport/EnemyHUD"]
 layout_mode = 2
-theme_override_font_sizes/font_size = 14
+theme_override_font_sizes/font_size = 12
 text = "史萊姆"
 
 [node name="HPLabel" type="Label" parent="BattleViewport/EnemyHUD"]
@@ -121,6 +121,7 @@ layout_mode = 2
 
 [node name="StatsLabel" type="Label" parent="BottomPanel/VBox/HeroStatsPanel/Margin/VBox"]
 layout_mode = 2
+theme_override_font_sizes/font_size = 13
 text = "Lv.1 勇者 | 金幣: 50"
 
 [node name="ExpBar" type="ProgressBar" parent="BottomPanel/VBox/HeroStatsPanel/Margin/VBox"]
