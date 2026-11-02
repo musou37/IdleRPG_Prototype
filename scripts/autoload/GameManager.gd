@@ -52,9 +52,23 @@ var inventory: Array[EquipmentData] = []
 var skills: Array[SkillData] = []
 
 func _ready() -> void:
+	_setup_fonts()
 	_init_default_skills()
 	_init_starter_equipment()
 	load_game()
+
+func _setup_fonts() -> void:
+	const FONT_TC_PATH := "res://assets/fonts/NotoSansTC-Bold.otf"
+	const FONT_EMOJI_PATH := "res://assets/fonts/NotoEmoji.ttf"
+	if ResourceLoader.exists(FONT_TC_PATH):
+		var tc_font := load(FONT_TC_PATH) as FontFile
+		if tc_font != null:
+			if ResourceLoader.exists(FONT_EMOJI_PATH):
+				var emoji_font := load(FONT_EMOJI_PATH) as FontFile
+				if emoji_font != null and not tc_font.fallbacks.has(emoji_font):
+					tc_font.fallbacks.append(emoji_font)
+			if ThemeDB.get_default_theme() != null:
+				ThemeDB.get_default_theme().default_font = tc_font
 
 func _init_default_skills() -> void:
 	skills.clear()

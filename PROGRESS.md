@@ -80,6 +80,12 @@
 
 ## 📝 近期對話決策與變更紀錄
 
+- **2026-11-02**：
+   - 建立 **Web (HTML5) 網頁版匯出設定與 GitHub Pages 自動化部署流程 (`export_presets.cfg`, `.github/workflows/deploy-web.yml`, `project.godot`)**：
+     - 將專案渲染器切換為 Web 與桌面皆相容的 `gl_compatibility` 模式，並設定單執行緒 Web 匯出（`variant/thread_support=false`），免除 GitHub Pages 對於 `SharedArrayBuffer` (COOP/COEP) 標頭的限制。
+     - 內嵌開源繁體中文與 Emoji 字型（`assets/fonts/NotoSansTC-Bold.otf`、`assets/fonts/NotoEmoji.ttf`），並在 `GameManager._setup_fonts()` 中串接 Emoji Fallback，解決瀏覽器 WebAssembly 沙盒無法讀取作業系統字型導致中文與圖示變方框的問題。
+     - 優化 `AssetLoader.get_texture()` 在匯出環境（Web / 打包 `.exe`）下優先透過 `ResourceLoader` 載入封裝於 `.pck` 內的貼圖資源。
+     - 新增 GitHub Actions 自動化工作流程（`.github/workflows/deploy-web.yml`），每次推送至 `main` 分支時自動以 Godot 4.7.2 建置網頁版並發布至 `gh-pages` 分支與 GitHub Pages。
 - **2026-10-22**：
    - 新增 **敵我雙方三大基礎戰鬥屬性 (`scripts/autoload/GameManager.gd`, `scripts/Main.gd`)**：
      - **連擊率 (`combo_rate`)**：初始值 `5%`，普通攻擊後有機率追加一次普通攻擊（追加的連擊普攻帶有 `is_combo = true`，不會再次觸發連擊）。

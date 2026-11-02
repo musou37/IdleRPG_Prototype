@@ -213,29 +213,30 @@ func _draw() -> void:
 	else:
 		_draw_procedural_icon(center, r, col, light_col)
 
+	var default_font := get_theme_default_font()
+	if default_font == null:
+		default_font = ThemeDB.fallback_font
+
 	# 3. 技能冷卻遮罩
 	if cooldown_ratio > 0.01:
 		var cd_h := s.y * cooldown_ratio
 		draw_rect(Rect2(0, s.y - cd_h, s.x, cd_h), Color(0.0, 0.0, 0.0, 0.68), true)
-		var font := ThemeDB.fallback_font
-		if font != null and cooldown_sec > 0.0:
+		if default_font != null and cooldown_sec > 0.0:
 			var cd_str := "%.1fs" % cooldown_sec
-			draw_string(font, Vector2(6, center.y + 5), cd_str, HORIZONTAL_ALIGNMENT_CENTER, s.x - 12, 13, Color(1.0, 0.95, 0.4))
+			draw_string(default_font, Vector2(6, center.y + 5), cd_str, HORIZONTAL_ALIGNMENT_CENTER, s.x - 12, 13, Color(1.0, 0.95, 0.4))
 
 	# 4. 右下角等級 / 狀態小標籤
 	if badge_text != "":
-		var font := ThemeDB.fallback_font
-		if font != null:
+		if default_font != null:
 			var b_col := Color(0.65, 0.65, 0.65) if is_locked else Color(1.0, 0.95, 0.75)
 			draw_rect(Rect2(2, s.y - 16, s.x - 4, 14), Color(0.05, 0.06, 0.09, 0.78), true)
-			draw_string(font, Vector2(4, s.y - 5), badge_text, HORIZONTAL_ALIGNMENT_RIGHT, s.x - 8, 11, b_col)
+			draw_string(default_font, Vector2(4, s.y - 5), badge_text, HORIZONTAL_ALIGNMENT_RIGHT, s.x - 8, 11, b_col)
 
 	# 5. 左上角強弱提示小箭頭 (▲較強 / ▼較弱)
 	if compare_tag != "":
-		var font := ThemeDB.fallback_font
-		if font != null:
+		if default_font != null:
 			draw_rect(Rect2(3, 3, 14, 14), Color(0.05, 0.06, 0.09, 0.78), true)
-			draw_string(font, Vector2(4, 14), compare_tag, HORIZONTAL_ALIGNMENT_CENTER, 12, 11, compare_color)
+			draw_string(default_font, Vector2(4, 14), compare_tag, HORIZONTAL_ALIGNMENT_CENTER, 12, 11, compare_color)
 
 func _draw_procedural_icon(center: Vector2, r: float, col: Color, light_col: Color) -> void:
 	match icon_kind:

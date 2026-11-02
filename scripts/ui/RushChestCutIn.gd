@@ -272,7 +272,9 @@ func _draw() -> void:
 			_draw_procedural_chest(chest_center, chest_scale_vec, a)
 
 	# 7. 繪製頂部與底部 Cut-In 炫耀標題文字
-	var font := ThemeDB.fallback_font
+	var font := get_theme_default_font()
+	if font == null:
+		font = ThemeDB.fallback_font
 	if font != null:
 		var top_str := "⚡ BOSS RUSH %d KILL 達成獎勵 ⚡" % rush_kills
 		draw_string_outline(font, Vector2(0, 255), top_str, HORIZONTAL_ALIGNMENT_CENTER, 720, 22, 7, Color(0, 0, 0, a))

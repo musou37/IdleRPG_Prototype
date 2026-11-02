@@ -49,6 +49,13 @@ static func get_texture(res_path: String) -> Texture2D:
 	if _tex_cache.has(res_path):
 		return _tex_cache[res_path]
 
+	# 匯出版本（如 Web 網頁版或打包 .exe）優先使用 ResourceLoader 讀取封裝在 .pck 內的貼圖
+	if not OS.has_feature("editor") and ResourceLoader.exists(res_path):
+		var packed_res := ResourceLoader.load(res_path)
+		if packed_res is Texture2D:
+			_tex_cache[res_path] = packed_res
+			return packed_res
+
 	var abs_path := ProjectSettings.globalize_path(res_path)
 	if FileAccess.file_exists(abs_path):
 		var img := Image.load_from_file(abs_path)

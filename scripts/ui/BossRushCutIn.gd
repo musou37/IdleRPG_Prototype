@@ -320,7 +320,9 @@ func _draw_right_boss_rush_text(master_alpha: float) -> void:
 	# 從右側 +500px 猛烈撞入至右側定位 0
 	var x_off := (1.0 - text_slide) * 500.0
 	var base := Vector2(x_off, 0.0)
-	var font := ThemeDB.fallback_font
+	var font := get_theme_default_font()
+	if font == null:
+		font = ThemeDB.fallback_font
 	if font == null:
 		return
 
